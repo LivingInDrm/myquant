@@ -144,8 +144,18 @@ class MomentumStrategy:
         if isinstance(date, str):
             date = pd.to_datetime(date)
         
-        if date not in self.daily_avg_vol_per_min_5d.index:
+        date_normalized = date.normalize()
+        
+        matched_date = None
+        for idx_date in self.daily_avg_vol_per_min_5d.index:
+            if pd.to_datetime(idx_date).normalize() == date_normalized:
+                matched_date = idx_date
+                break
+        
+        if matched_date is None:
             return
+        
+        date = matched_date
         
         minutes_since_open = calc_minutes_since_open(minute_timestamp)
         if minutes_since_open <= 0:
@@ -234,10 +244,18 @@ class MomentumStrategy:
         if isinstance(date, str):
             date = pd.to_datetime(date)
         
-        if date not in self.buy_cond1_df.index:
+        date_normalized = date.normalize()
+        
+        matched_date = None
+        for idx_date in self.buy_cond1_df.index:
+            if pd.to_datetime(idx_date).normalize() == date_normalized:
+                matched_date = idx_date
+                break
+        
+        if matched_date is None:
             return pd.Series(dtype=float)
         
-        cond1 = self.buy_cond1_df.loc[date]
+        cond1 = self.buy_cond1_df.loc[matched_date]
         
         result_scores = pd.Series(dtype=float)
         
@@ -254,9 +272,9 @@ class MomentumStrategy:
             
             score = self.minute_scores[stock_code]
             if score >= 8:
-                if self.listing_filter_df is not None and date in self.listing_filter_df.index:
+                if self.listing_filter_df is not None and matched_date in self.listing_filter_df.index:
                     if stock_code in self.listing_filter_df.columns:
-                        if not self.listing_filter_df.loc[date, stock_code]:
+                        if not self.listing_filter_df.loc[matched_date, stock_code]:
                             continue
                 
                 result_scores[stock_code] = score

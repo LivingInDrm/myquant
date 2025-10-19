@@ -17,7 +17,9 @@ if sys.stderr.encoding != 'utf-8':
 
 import pandas as pd
 import numpy as np
+from datetime import datetime
 from xtquant import xtdata
+from xtquant.qmttools.functions import get_trade_detail_data
 
 from core.data_provider import DataProvider
 from core.trade_executor import TradeExecutor
@@ -52,13 +54,22 @@ def init(C):
     g.trade_executor = TradeExecutor(mode='backtest')
     g.strategy = MomentumStrategy()
     
-    g.stock_list = g.data_provider.get_stock_list_in_sector(g.stock_pool_name)
+    g.stock_list = C.get_stock_list_in_sector(g.stock_pool_name)
     print(f"股票池: {g.stock_pool_name}, 股票数量: {len(g.stock_list)}")
     
     g.account_id = 'test'
     g.money = 1000000
     
     g.max_buy_count = MAX_POSITIONS
+    
+    g.minute_data_cache = {}
+    g.current_trading_date = None
+    g.day_state = {
+        'buy_count': 0,
+        'minute_counter': 0,
+        'last_signal_count': 0,
+        'open_prices': {}
+    }
     
     print(f"[DEBUG] 账户ID: {g.account_id}")
     print(f"[DEBUG] 初始资金设置: {g.money}")
@@ -117,7 +128,7 @@ def after_init(C):
     print("计算上市日期过滤...")
     listing_filter_df = filter_opendate(g.stock_list, close_df, 120, 'xtdata')
     
-    g.strategy.prepare_factors(
+    g.strategy.prepare_daily_factors(
         close_df, open_df, high_df, volume_df, amount_df,
         stock_list=g.stock_list,
         listing_filter_df=listing_filter_df
@@ -128,51 +139,58 @@ def after_init(C):
     print("=" * 60)
 
 
-def handlebar(C):
+def start_new_trading_day(current_date, C):
     """
-    每日交易逻辑
+    交易日切换处理
     
     Args:
+        current_date: 当前交易日（字符串格式，如'20240115'）
         C: contextinfo对象
     """
-    current_bar = C.barpos
-    current_timetag = C.get_bar_timetag(current_bar)
-    current_date = timetag_to_datetime(current_timetag, "%Y%m%d")
-    
-    if current_date < g.backtest_start or current_date > g.backtest_end:
-        return
-    
     print(f"\n{'=' * 60}")
-    print(f"交易日: {current_date}")
+    print(f"新交易日: {current_date}")
     print(f"{'=' * 60}")
     
-    print(f"[DEBUG] 开始获取持仓和资金信息...")
-    print(f"[DEBUG] account_id={g.account_id}, C类型={type(C)}")
+    print(f"加载当日分钟数据...")
+    minute_data = g.data_provider.get_minute_data(
+        stock_list=g.stock_list,
+        date=current_date,
+        period='1m'
+    )
+    
+    if not minute_data or len(minute_data) == 0:
+        print(f"警告：日期 {current_date} 没有分钟线数据")
+        g.minute_data_cache[current_date] = {}
+    else:
+        g.minute_data_cache[current_date] = minute_data
+        print(f"分钟数据加载成功，股票数: {len(minute_data)}")
+    
+    old_dates = sorted([d for d in g.minute_data_cache.keys() if d != current_date])
+    if len(old_dates) > 3:
+        for old_date in old_dates[:-3]:
+            del g.minute_data_cache[old_date]
+            print(f"清理旧缓存: {old_date}")
     
     current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-    print(f"[DEBUG] 持仓信息: {current_holdings}")
-    
     current_cash = g.trade_executor.get_cash(g.account_id, C)
-    print(f"[DEBUG] 获取到的资金: {current_cash}")
+    print(f"开盘持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
     
-    print(f"当前持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
-    
-    current_prices = {}
+    open_prices = {}
     for stock_code in g.stock_list:
         if current_date in g.strategy.open_df.index and stock_code in g.strategy.open_df.columns:
             price = g.strategy.open_df.loc[current_date, stock_code]
             if not pd.isna(price) and price > 0:
-                current_prices[stock_code] = price
+                open_prices[stock_code] = price
     
-    exit_dict = g.strategy.generate_sell_signals(current_prices, current_date)
+    exit_dict = g.strategy.generate_sell_signals(open_prices, current_date)
     
     if exit_dict:
-        print(f"\n卖出信号: {len(exit_dict)} 只股票")
+        print(f"\n开盘卖出信号: {len(exit_dict)} 只股票")
         for stock_code, reason in exit_dict.items():
             if stock_code in current_holdings:
                 holding = current_holdings[stock_code]
                 volume = holding['volume']
-                price = current_prices.get(stock_code, 0)
+                price = open_prices.get(stock_code, 0)
                 
                 if price > 0:
                     print(f"  卖出 {stock_code}: 价格={price:.2f}, 数量={volume}, 原因={reason}")
@@ -184,65 +202,161 @@ def handlebar(C):
                     
                     g.strategy.on_sell(stock_code)
     
-    print(f"[DEBUG] 卖出后重新获取持仓和资金...")
     current_holdings = g.trade_executor.get_holdings(g.account_id, C)
     current_cash = g.trade_executor.get_cash(g.account_id, C)
-    print(f"[DEBUG] 卖出后资金: {current_cash}")
+    print(f"卖出后持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
+    
+    g.day_state = {
+        'buy_count': 0,
+        'minute_counter': 0,
+        'last_signal_count': 0,
+        'open_prices': open_prices
+    }
+    
+    g.strategy.init_minute_cache(current_date, g.stock_list)
+    
+    print(f"交易日 {current_date} 初始化完成\n")
+
+
+def handlebar(C):
+    """
+    每分钟交易逻辑（分钟级回测）
+    
+    Args:
+        C: contextinfo对象
+    """
+    current_bar = C.barpos
+    current_timetag = C.get_bar_timetag(current_bar)
+    current_date = timetag_to_datetime(current_timetag, "%Y%m%d")
+    current_time = timetag_to_datetime(current_timetag, "%H:%M")
+    current_timestamp_str = timetag_to_datetime(current_timetag, "%Y%m%d%H%M%S")
+    
+    if g.day_state.get('minute_counter', 0) == 0:
+        print(f"[DEBUG] 首次调用 handlebar:")
+        print(f"  current_timetag (毫秒): {current_timetag}")
+        print(f"  current_date: {current_date}")
+        print(f"  current_time: {current_time}")
+        print(f"  current_timestamp_str: {current_timestamp_str}")
+        first_stock = list(g.minute_data_cache.get(current_date, {}).keys())[0] if current_date in g.minute_data_cache and g.minute_data_cache[current_date] else None
+        if first_stock:
+            sample_df = g.minute_data_cache[current_date][first_stock]
+            if not sample_df.empty:
+                print(f"  缓存数据示例索引: {sample_df.index[:5].tolist()}")
+    
+    if current_date < g.backtest_start or current_date > g.backtest_end:
+        return
+    
+    if g.current_trading_date is None or current_date != g.current_trading_date:
+        start_new_trading_day(current_date, C)
+        g.current_trading_date = current_date
+    
+    g.day_state['minute_counter'] += 1
+    
+    if current_date not in g.minute_data_cache or not g.minute_data_cache[current_date]:
+        return
+    
+    minute_data = g.minute_data_cache[current_date]
+    
+    minute_prices = {}
+    minute_volumes = {}
+    minute_amounts = {}
+    
+    for stock_code, df in minute_data.items():
+        if df.empty:
+            continue
+        
+        if current_timestamp_str in df.index:
+            minute_prices[stock_code] = df.loc[current_timestamp_str, 'close']
+            minute_volumes[stock_code] = df.loc[current_timestamp_str, 'volume']
+            minute_amounts[stock_code] = df.loc[current_timestamp_str, 'amount']
+    
+    if not minute_prices:
+        if g.day_state['minute_counter'] <= 2:
+            print(f"[{current_time}] 时间戳 {current_timestamp_str} 无数据（可能非交易时段）")
+        return
+    
+    current_timestamp_dt = datetime.strptime(current_timestamp_str, '%Y%m%d%H%M%S')
+    
+    g.strategy.update_minute_factors(
+        date=current_date,
+        minute_timestamp=current_timestamp_dt,
+        minute_prices=minute_prices,
+        minute_volumes=minute_volumes,
+        minute_amounts=minute_amounts
+    )
+    
+    buy_scores = g.strategy.generate_buy_signals_minute(current_date)
+    
+    if g.day_state['minute_counter'] <= 3 or len(buy_scores) != g.day_state['last_signal_count']:
+        if len(buy_scores) > 0:
+            print(f"[{current_time}] 买入信号: {len(buy_scores)} 只股票 (排名前5: {list(buy_scores.head().index)})")
+        g.day_state['last_signal_count'] = len(buy_scores)
+    
+    if len(buy_scores) == 0:
+        return
+    
+    current_holdings = g.trade_executor.get_holdings(g.account_id, C)
+    current_cash = g.trade_executor.get_cash(g.account_id, C)
     
     available_slots = g.max_buy_count - len(current_holdings)
+    existing_codes = set(current_holdings.keys())
     
-    if available_slots > 0 and current_cash > 10000:
-        print(f"\n生成买入信号...")
-        buy_scores = g.strategy.generate_buy_signals(current_date)
-        print(f"买入信号数量: {len(buy_scores)}")
+    if available_slots <= 0 or current_cash < 10000:
+        return
+    
+    open_prices = g.day_state.get('open_prices', {})
+    
+    holding_market_value = sum(
+        h['volume'] * open_prices.get(s, 0)
+        for s, h in current_holdings.items()
+    )
+    
+    for stock_code in buy_scores.index:
+        if stock_code in existing_codes:
+            continue
         
-        if len(buy_scores) > 0:
-            print(f"前5个买入信号: {buy_scores.head()}")
-            buy_list = g.strategy.filter_buy_list(buy_scores, current_date, available_slots)
+        if available_slots <= 0 or current_cash < 10000:
+            break
+        
+        price = minute_prices.get(stock_code, 0)
+        if price <= 0:
+            continue
+        
+        total_capital = current_cash + holding_market_value
+        
+        buy_amount, score = g.strategy.calc_buy_amount(
+            stock_code, total_capital, current_date
+        )
+        
+        if buy_amount > current_cash * 0.95:
+            buy_amount = current_cash * 0.95
+        
+        if buy_amount < 10000:
+            continue
+        
+        volume = int(buy_amount / price / 100) * 100
+        
+        if volume >= 100:
+            print(f"  [{current_time}] 买入 {stock_code}: 价格={price:.2f}, 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
             
+            g.trade_executor.buy(
+                g.account_id, stock_code, price, volume,
+                'momentum_strategy', f'buy_score_{score}', C
+            )
+            
+            g.strategy.on_buy(stock_code, price, volume, current_date, score, buy_time=current_timestamp_dt)
+            
+            current_holdings = g.trade_executor.get_holdings(g.account_id, C)
+            current_cash = g.trade_executor.get_cash(g.account_id, C)
+            available_slots = g.max_buy_count - len(current_holdings)
             existing_codes = set(current_holdings.keys())
-            buy_list = [s for s in buy_list if s not in existing_codes]
+            holding_market_value = sum(
+                h['volume'] * open_prices.get(s, 0)
+                for s, h in current_holdings.items()
+            )
             
-            if buy_list:
-                print(f"买入信号: {len(buy_list)} 只股票")
-                
-                for stock_code in buy_list:
-                    price = current_prices.get(stock_code, 0)
-                    
-                    if price <= 0:
-                        continue
-                    
-                    total_capital = current_cash + sum(
-                        h['volume'] * current_prices.get(s, 0) 
-                        for s, h in current_holdings.items()
-                    )
-                    
-                    buy_amount, score = g.strategy.calc_buy_amount(
-                        stock_code, total_capital, current_date
-                    )
-                    
-                    if buy_amount > current_cash * 0.95:
-                        buy_amount = current_cash * 0.95
-                    
-                    if buy_amount < 10000:
-                        continue
-                    
-                    volume = int(buy_amount / price / 100) * 100
-                    
-                    if volume >= 100:
-                        print(f"  买入 {stock_code}: 价格={price:.2f}, 数量={volume}, 得分={score}")
-                        
-                        g.trade_executor.buy(
-                            g.account_id, stock_code, price, volume,
-                            'momentum_strategy', f'buy_score_{score}', C
-                        )
-                        
-                        g.strategy.on_buy(stock_code, price, volume, current_date, score)
-                        
-                        current_cash -= volume * price
-                        
-                        if current_cash < 10000:
-                            break
+            g.day_state['buy_count'] += 1
+
 
 
 if __name__ == '__main__':
@@ -250,7 +364,7 @@ if __name__ == '__main__':
     
     param = {
         'stock_code': '000001.SZ',
-        'period': '1d',
+        'period': '1m',
         'start_time': BACKTEST_CONFIG['start_time'],
         'end_time': BACKTEST_CONFIG['end_time'],
         'trade_mode': 'backtest',
@@ -275,11 +389,15 @@ if __name__ == '__main__':
         
         backtest_index = result.get_backtest_index()
         print("\n回测指标:")
-        for key, value in backtest_index.items():
-            print(f"  {key}: {value}")
+        print(backtest_index)
         
         print("\n分组结果:")
-        group_result = result.get_group_result()
-        print(group_result)
+        group_result = result.get_group_result(['order', 'deal', 'position'])
+        if 'order' in group_result:
+            print(f"\n订单总数: {len(group_result['order'])}")
+        if 'deal' in group_result:
+            print(f"成交总数: {len(group_result['deal'])}")
+        if 'position' in group_result:
+            print(f"持仓记录数: {len(group_result['position'])}")
     
     print("\n回测完成")

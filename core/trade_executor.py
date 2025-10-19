@@ -156,7 +156,7 @@ class TradeExecutor:
                     'available': obj.m_nCanUseVolume
                 }
             
-            print(f"[DEBUG] 解析后的持仓: {holdings}")
+#            print(f"[DEBUG] 解析后的持仓: {holdings}")
             return holdings
         
         elif self.mode == 'realtime':
@@ -189,9 +189,7 @@ class TradeExecutor:
         Returns:
             float: 可用资金
         """
-        if self.mode == 'backtest':
-            print(f"[DEBUG] get_cash调用 - account={account}, C={C is not None}")
-            
+        if self.mode == 'backtest':            
             if C is None:
                 print("[DEBUG] C为None，返回0")
                 return 0
@@ -202,18 +200,9 @@ class TradeExecutor:
             except ImportError as e:
                 print(f"[DEBUG] 导入失败: {e}")
                 return 0
-            
-            print(f"[DEBUG] 调用get_trade_detail_data(account={account}, type='stock', category='account', strategy='momentum_strategy')")
             asset = get_trade_detail_data(account, 'stock', 'account', 'momentum_strategy')
-            
-            print(f"[DEBUG] asset类型: {type(asset)}")
-            print(f"[DEBUG] asset长度: {len(asset) if asset else 0}")
-            
             if asset and len(asset) > 0:
-                print(f"[DEBUG] asset[0]对象: {asset[0]}")
-                print(f"[DEBUG] asset[0]的所有属性: {[attr for attr in dir(asset[0]) if not attr.startswith('_')]}")
                 available = asset[0].m_dAvailable
-                print(f"[DEBUG] m_dAvailable值: {available}")
                 return available
             else:
                 print("[DEBUG] asset为空或长度为0，返回0")

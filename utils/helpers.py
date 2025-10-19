@@ -246,34 +246,36 @@ def print_progress(current, total, prefix='Progress:', suffix='', decimals=1, ba
 
 def calc_minutes_since_open(timestamp):
     """
-    计算累计开市时间（从9:31开始计数）
+    计算累计开市时间（从9:30开始计数）
     
-    上午9:31-11:30共120分钟，下午13:01-15:00共120分钟
+    上午9:30-11:30共121分钟，下午13:00-15:00共121分钟
     
     Args:
-        timestamp: datetime对象或字符串（如 '2024-10-18 10:30:00'）
+        timestamp: datetime对象、字符串或整数（如 20250901093000）
         
     Returns:
-        int: 累计分钟数（1-240），如果不在交易时间返回0
+        int: 累计分钟数（1-242），如果不在交易时间返回0
     """
-    if isinstance(timestamp, str):
-        timestamp = pd.to_datetime(timestamp)
+    if isinstance(timestamp, (str, int)):
+        if isinstance(timestamp, int):
+            timestamp = str(timestamp)
+        timestamp = pd.to_datetime(timestamp, format='%Y%m%d%H%M%S')
     
     hour = timestamp.hour
     minute = timestamp.minute
     
-    if hour == 9 and minute >= 31:
-        return minute - 30
+    if hour == 9 and minute >= 30:
+        return minute - 29
     elif hour == 10:
-        return 30 + minute
+        return 31 + minute
     elif hour == 11 and minute <= 30:
-        return 90 + minute
-    elif hour == 13 and minute >= 1:
-        return 120 + minute
+        return 91 + minute
+    elif hour == 13:
+        return 121 + minute
     elif hour == 14:
-        return 180 + minute
+        return 181 + minute
     elif hour == 15 and minute == 0:
-        return 240
+        return 241
     else:
         return 0
 
