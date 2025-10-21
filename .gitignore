@@ -47,6 +47,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+backtest_log_*.txt
+debug_*.log
 
 # Data files (if they are large)
 data/*.csv

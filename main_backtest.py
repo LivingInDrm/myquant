@@ -31,7 +31,10 @@ from core.data_provider import DataProvider
 from core.trade_executor import TradeExecutor
 from strategies.momentum_strategy import MomentumStrategy
 from utils.helpers import get_df_ex, filter_opendate, timetag_to_datetime
-from config.strategy_config import BACKTEST_CONFIG, MAX_POSITIONS, SLIPPAGE_BUY, SLIPPAGE_SELL
+from config.strategy_config import MAX_POSITIONS, STOCK_POOL
+from config.backtest_config import load_backtest_config
+
+BACKTEST_CONFIG = load_backtest_config()
 
 
 class G:
@@ -53,9 +56,8 @@ def init(C):
     print("初始化短期强势股量化交易系统")
     print("=" * 60)
     
-    g.stock_pool_name = BACKTEST_CONFIG.get('stock_pool', '沪深A股')
+    g.stock_pool_name = STOCK_POOL
     g.account_id = 'test'
-    g.money = 1000000
     
     g.data_provider = DataProvider(batch_size=500)
     g.trade_executor = TradeExecutor(mode='backtest')
@@ -64,7 +66,6 @@ def init(C):
     g.stock_list = C.get_stock_list_in_sector(g.stock_pool_name)
     print(f"股票池: {g.stock_pool_name}, 股票数量: {len(g.stock_list)}")
     
-    g.initial_capital = BACKTEST_CONFIG.get('initial_capital', 1000000)
     g.max_buy_count = MAX_POSITIONS
     
     g.minute_data_cache = {}
@@ -77,7 +78,6 @@ def init(C):
     }
     
     print(f"[DEBUG] 账户ID: {g.account_id}")
-    print(f"[DEBUG] 初始资金设置: {g.money}")
     print(f"[DEBUG] 回测配置: {BACKTEST_CONFIG}")
     
     print("初始化完成")
@@ -213,26 +213,6 @@ def handlebar(C):
     current_time = timetag_to_datetime(current_timetag, "%H:%M")
     current_timestamp_str = timetag_to_datetime(current_timetag, "%Y%m%d%H%M%S")
     
-    # 扩展调试：前10次都打印
-    if g.day_state.get('minute_counter', 0) < 10:
-        print(f"\n[DEBUG] handlebar 调用 #{g.day_state.get('minute_counter', 0) + 1}:")
-        print(f"  current_bar (barpos): {current_bar}")
-        print(f"  current_timetag (毫秒): {current_timetag}")
-        print(f"  current_date: {current_date}")
-        print(f"  current_time: {current_time}")
-        print(f"  current_timestamp_str: {current_timestamp_str}")
-        first_stock = list(g.minute_data_cache.get(current_date, {}).keys())[0] if current_date in g.minute_data_cache and g.minute_data_cache[current_date] else None
-        if first_stock:
-            sample_df = g.minute_data_cache[current_date][first_stock]
-            if not sample_df.empty:
-                print(f"  缓存数据索引类型: {type(sample_df.index[0])}")
-                print(f"  缓存数据前5个索引: {sample_df.index[:5].tolist()}")
-                print(f"  当前时间戳是否在索引中: {current_timestamp_str in sample_df.index}")
-                if current_timestamp_str in sample_df.index:
-                    print(f"  匹配成功 - 收盘价: {sample_df.loc[current_timestamp_str, 'close']}")
-                else:
-                    print(f"  匹配失败 - 尝试查看索引[0]: {sample_df.index[0]}, 对应close: {sample_df.iloc[0]['close']}")
-    
     if current_date < g.backtest_start or current_date > g.backtest_end:
         return
     
@@ -275,23 +255,8 @@ def handlebar(C):
             if len(unmatched_samples) < 3:
                 unmatched_samples.append((stock_code, df.index[0] if len(df.index) > 0 else None))
     
-    if g.day_state['minute_counter'] <= 10:
-        print(f"[DEBUG] 数据匹配结果: 匹配={matched_count}/{len(minute_data)}")
-        if unmatched_samples:
-            print(f"[DEBUG] 未匹配样本 (前3个):")
-            for code, idx in unmatched_samples:
-                print(f"  {code}: 索引[0]={idx}, 类型={type(idx)}")
-    
     if not minute_prices:
-        if g.day_state['minute_counter'] <= 2:
-            print(f"[{current_time}] 时间戳 {current_timestamp_str} 无数据（可能非交易时段）")
         return
-    
-    if g.day_state['minute_counter'] <= 10:
-        sample_stocks = list(minute_prices.keys())[:3]
-        print(f"[DEBUG] 提取的价格样本 (前3只):")
-        for code in sample_stocks:
-            print(f"  {code}: close={minute_prices.get(code, 'N/A'):.2f}, volume={minute_volumes.get(code, 0):,.0f}")
     
     current_timestamp_dt = datetime.strptime(current_timestamp_str, '%Y%m%d%H%M%S')
     
@@ -327,7 +292,7 @@ def handlebar(C):
                         continue
                     
                     if current_price > 0:
-                        sell_price = current_price * (1 - SLIPPAGE_SELL)
+                        sell_price = current_price
                         
                         print(f"  [{current_time}] 卖出 {stock_code}: 价格={sell_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
                         
@@ -399,7 +364,7 @@ def handlebar(C):
         if market_price <= 0:
             continue
         
-        buy_price = market_price * (1 + SLIPPAGE_BUY)
+        buy_price = market_price
         
         total_capital = current_cash + holding_market_value
         
@@ -416,7 +381,7 @@ def handlebar(C):
         volume = int(buy_amount / buy_price / 100) * 100
         
         if volume >= 100:
-            print(f"  [{current_time}] 买入 {stock_code}: 市价={market_price:.2f}, 挂单价={buy_price:.2f} (+{SLIPPAGE_BUY*100:.1f}%), 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
+            print(f"  [{current_time}] 买入 {stock_code}: 市价={market_price:.2f}, 挂单价={buy_price:.2f}, 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
             
             print(f"[DEBUG] 买入前持仓数: {len(current_holdings)}, {stock_code} 在持仓中: {stock_code in current_holdings}")
             if stock_code in current_holdings:
@@ -475,49 +440,6 @@ def handlebar(C):
                 g.account_id, stock_code, buy_price, volume,
                 'momentum_strategy', f'buy_score_{score}', C
             )
-            print(f"[DEBUG] 第一次买入下单返回 order_id: {order_id}")
-            
-            holdings_after_first_buy = g.trade_executor.get_holdings(g.account_id, C)
-            print(f"[DEBUG] 第一次买入 {stock_code} 后立即查询持仓数: {len(holdings_after_first_buy)}")
-            print(f"[DEBUG] {stock_code} 是否在持仓中: {stock_code in holdings_after_first_buy}")
-            if stock_code in holdings_after_first_buy:
-                print(f"[DEBUG] {stock_code} 持仓数量: {holdings_after_first_buy[stock_code].get('volume', 0)}, 可用: {holdings_after_first_buy[stock_code].get('available', 0)}")
-            
-            # [调试逻辑] 立即再下一单相同的买入，观察持仓变化
-            print("\n" + "=" * 60)
-            print(f"[调试] 立即再下第二单相同买入: {stock_code}")
-            print("-" * 60)
-            print(f"  价格: {buy_price:.2f} (与第一单相同)")
-            print(f"  数量: {volume} (与第一单相同)")
-            print("=" * 60)
-            
-            order_id_2 = g.trade_executor.buy(
-                g.account_id, stock_code, buy_price, volume,
-                'momentum_strategy', f'buy_score_{score}_debug_duplicate', C
-            )
-            print(f"[DEBUG] 第二次买入下单返回 order_id: {order_id_2}")
-            
-            holdings_after_second_buy = g.trade_executor.get_holdings(g.account_id, C)
-            print(f"[DEBUG] 第二次买入 {stock_code} 后立即查询持仓数: {len(holdings_after_second_buy)}")
-            print(f"[DEBUG] {stock_code} 是否在持仓中: {stock_code in holdings_after_second_buy}")
-            if stock_code in holdings_after_second_buy:
-                print(f"[DEBUG] {stock_code} 持仓数量: {holdings_after_second_buy[stock_code].get('volume', 0)}, 可用: {holdings_after_second_buy[stock_code].get('available', 0)}")
-            
-            # 对比两次买入后的持仓变化
-            print("\n" + "=" * 60)
-            print(f"[调试对比] {stock_code} 持仓变化")
-            print("-" * 60)
-            first_volume = holdings_after_first_buy.get(stock_code, {}).get('volume', 0) if stock_code in holdings_after_first_buy else 0
-            second_volume = holdings_after_second_buy.get(stock_code, {}).get('volume', 0) if stock_code in holdings_after_second_buy else 0
-            first_available = holdings_after_first_buy.get(stock_code, {}).get('available', 0) if stock_code in holdings_after_first_buy else 0
-            second_available = holdings_after_second_buy.get(stock_code, {}).get('available', 0) if stock_code in holdings_after_second_buy else 0
-            print(f"  第一次买入后: 总数量={first_volume}, 可用={first_available}")
-            print(f"  第二次买入后: 总数量={second_volume}, 可用={second_available}")
-            print(f"  变化量: 总数量增加={second_volume - first_volume}, 可用增加={second_available - first_available}")
-            print(f"  预期变化: +{volume} (两次买入各{volume}股)")
-            print("=" * 60 + "\n")
-            
-            holdings_after_buy = holdings_after_second_buy
             
             g.strategy.on_buy(stock_code, current_date, score, buy_time=current_timestamp_dt)
             
@@ -536,24 +458,9 @@ def handlebar(C):
 
 if __name__ == '__main__':
     from xtquant.qmttools import run_strategy_file
+    from config.backtest_config import build_backtest_param
     
-    param = {
-        'stock_code': '000001.SZ',
-        'period': '1m',
-        'start_time': BACKTEST_CONFIG['start_time'],
-        'end_time': BACKTEST_CONFIG['end_time'],
-        'trade_mode': 'backtest',
-        'quote_mode': 'history',
-        'backtest': {
-            'slippage_type': 2,
-            'slippage': 0.005,
-            'max_vol_rate': 0,
-            'open_commission': 0.0003,
-            'close_commission': 0.0003,
-            'close_tax': 0.001,
-            'min_commission': 5
-        }
-    }
+    param = build_backtest_param(BACKTEST_CONFIG)
     
     user_script = sys.argv[0]
     

@@ -45,6 +45,9 @@ class MomentumStrategy:
         
         self.his_st_dict = {}
         self.listing_filter_df = None
+        
+        self.trading_dates = []
+        self.trading_date_to_idx = {}
     
     def prepare_daily_factors(self, close_df, open_df, high_df, volume_df, amount_df, 
                              stock_list=None, listing_filter_df=None):
@@ -60,32 +63,26 @@ class MomentumStrategy:
             stock_list: 股票列表（用于上市日期过滤）
             listing_filter_df: 上市日期过滤DataFrame（可选）
         """
-        print("Preparing daily factors...")
-        
         self.close_df = close_df.shift(1)
         self.open_df = open_df
         self.high_df = high_df.shift(1)
         self.volume_df = volume_df.shift(1)
         self.amount_df = amount_df.shift(1)
         
-        print("Calculating moving averages...")
         self.ma_dict = self.factor_calc.calc_ma(close_df, [5, 10, 20, 30, 60, 120])
         for period in self.ma_dict:
             self.ma_dict[period] = self.ma_dict[period].shift(1)
         
-        print("Calculating rolling max...")
         self.rolling_max_dict = self.factor_calc.calc_rolling_max(
             high_df, [20, 40, 60, 80, 100]
         )
         for period in self.rolling_max_dict:
             self.rolling_max_dict[period] = self.rolling_max_dict[period].shift(1)
         
-        print("Calculating uptrend scores (daily)...")
         self.score_df = self.factor_calc.calc_uptrend_score(
             self.close_df, self.high_df, self.volume_df, self.ma_dict
         )
         
-        print("Calculating buy condition 1...")
         self.buy_cond1_df = self.factor_calc.calc_buy_condition_1(
             close_df,
             consecutive_days=BUY_CONDITION_1['consecutive_up_days'],
@@ -93,14 +90,12 @@ class MomentumStrategy:
             or_pct_change=BUY_CONDITION_1['or_pct_change']
         ).shift(1)
         
-        print("Calculating buy condition 2 (daily)...")
         self.buy_cond2_df = self.factor_calc.calc_buy_condition_2_simple(
             volume_df, amount_df,
             volume_ratio_threshold=BUY_CONDITION_2['late_volume_ratio'],
             amount_threshold=BUY_CONDITION_2['late_amount']
         ).shift(1)
         
-        print("Calculating daily average volume per minute (5d & 10d)...")
         self.daily_avg_vol_per_min_5d = calc_daily_avg_volume_per_minute(
             volume_df, window=DAILY_AVG_VOLUME_WINDOW_5D
         ).shift(1)
@@ -112,7 +107,8 @@ class MomentumStrategy:
         if listing_filter_df is not None:
             self.listing_filter_df = listing_filter_df
         
-        print("Daily factors prepared successfully")
+        self.trading_dates = [pd.to_datetime(d).strftime('%Y%m%d') for d in close_df.index]
+        self.trading_date_to_idx = {date: idx for idx, date in enumerate(self.trading_dates)}
     
     def init_minute_cache(self, date, stock_list):
         """
@@ -389,14 +385,19 @@ class MomentumStrategy:
         target_profit = metadata['target_profit']
         
         if isinstance(metadata['buy_date'], str):
-            buy_date = datetime.strptime(metadata['buy_date'], '%Y%m%d')
+            buy_date_str = metadata['buy_date']
         else:
-            buy_date = metadata['buy_date']
+            buy_date_str = metadata['buy_date'].strftime('%Y%m%d') if isinstance(metadata['buy_date'], datetime) else str(metadata['buy_date'])
         
-        if isinstance(current_date, str):
-            current_date = datetime.strptime(current_date, '%Y%m%d')
+        if isinstance(current_date, datetime):
+            current_date_str = current_date.strftime('%Y%m%d')
+        else:
+            current_date_str = str(current_date)
         
-        hold_days = (current_date - buy_date).days
+        if buy_date_str in self.trading_date_to_idx and current_date_str in self.trading_date_to_idx:
+            hold_days = self.trading_date_to_idx[current_date_str] - self.trading_date_to_idx[buy_date_str]
+        else:
+            hold_days = 0
         
         pct_change = (current_price - buy_price) / buy_price
         
