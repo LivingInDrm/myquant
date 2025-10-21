@@ -19,13 +19,12 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from xtquant import xtdata
-from xtquant.qmttools.functions import get_trade_detail_data
 
 from core.data_provider import DataProvider
 from core.trade_executor import TradeExecutor
 from strategies.momentum_strategy import MomentumStrategy
 from utils.helpers import get_df_ex, filter_opendate, timetag_to_datetime
-from config.strategy_config import BACKTEST_CONFIG, MAX_POSITIONS
+from config.strategy_config import BACKTEST_CONFIG, MAX_POSITIONS, SLIPPAGE_BUY, SLIPPAGE_SELL
 
 
 class G:
@@ -182,30 +181,6 @@ def start_new_trading_day(current_date, C):
             if not pd.isna(price) and price > 0:
                 open_prices[stock_code] = price
     
-    exit_dict = g.strategy.generate_sell_signals(open_prices, current_date)
-    
-    if exit_dict:
-        print(f"\n开盘卖出信号: {len(exit_dict)} 只股票")
-        for stock_code, reason in exit_dict.items():
-            if stock_code in current_holdings:
-                holding = current_holdings[stock_code]
-                volume = holding['volume']
-                price = open_prices.get(stock_code, 0)
-                
-                if price > 0:
-                    print(f"  卖出 {stock_code}: 价格={price:.2f}, 数量={volume}, 原因={reason}")
-                    
-                    g.trade_executor.sell(
-                        g.account_id, stock_code, price, volume,
-                        'momentum_strategy', f'sell_{reason}', C
-                    )
-                    
-                    g.strategy.on_sell(stock_code)
-    
-    current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-    current_cash = g.trade_executor.get_cash(g.account_id, C)
-    print(f"卖出后持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
-    
     g.day_state = {
         'buy_count': 0,
         'minute_counter': 0,
@@ -285,6 +260,56 @@ def handlebar(C):
         minute_amounts=minute_amounts
     )
     
+    current_holdings = g.trade_executor.get_holdings(g.account_id, C)
+    
+    if len(current_holdings) > 0 and minute_prices:
+        exit_dict = g.strategy.generate_sell_signals(minute_prices, current_date)
+        
+        if exit_dict:
+            print(f"\n[{current_time}] 卖出信号: {len(exit_dict)} 只股票")
+            
+            print(f"[DEBUG] 卖出前持仓数: {len(current_holdings)}")
+            for code, h in list(current_holdings.items())[:5]:
+                print(f"[DEBUG]   {code}: 总数量={h.get('volume', 0)}, 可用={h.get('available', 0)}")
+            
+            for stock_code, reason in exit_dict.items():
+                if stock_code in current_holdings:
+                    holding = current_holdings[stock_code]
+                    total_volume = holding['volume']
+                    available_volume = holding.get('available', 0)
+                    current_price = minute_prices.get(stock_code, 0)
+                    
+                    if available_volume <= 0:
+                        print(f"[DEBUG] {stock_code} 可用数量为0 (总持仓={total_volume}, 可用={available_volume}), 跳过卖出 (T+1限制)")
+                        continue
+                    
+                    if current_price > 0:
+                        sell_price = current_price * (1 - SLIPPAGE_SELL)
+                        
+                        print(f"  [{current_time}] 卖出 {stock_code}: 价格={sell_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
+                        
+                        order_id = g.trade_executor.sell(
+                            g.account_id, stock_code, sell_price, available_volume,
+                            'momentum_strategy', f'sell_{reason}', C
+                        )
+                        print(f"[DEBUG] 卖出下单返回 order_id: {order_id}")
+                        
+                        holdings_after_sell = g.trade_executor.get_holdings(g.account_id, C)
+                        print(f"[DEBUG] 卖出 {stock_code} 后立即查询持仓数: {len(holdings_after_sell)}")
+                        print(f"[DEBUG] {stock_code} 是否还在持仓中: {stock_code in holdings_after_sell}")
+                        if stock_code in holdings_after_sell:
+                            print(f"[DEBUG] {stock_code} 剩余数量: {holdings_after_sell[stock_code].get('volume', 0)}, 可用: {holdings_after_sell[stock_code].get('available', 0)}")
+                        
+                        g.strategy.on_sell(stock_code)
+                    else:
+                        print(f"[DEBUG] {stock_code} 无当前价格数据,跳过卖出 (current_price={current_price})")
+                else:
+                    print(f"[DEBUG] {stock_code} 不在回测引擎持仓中,跳过卖出")
+            
+            current_holdings = g.trade_executor.get_holdings(g.account_id, C)
+            current_cash = g.trade_executor.get_cash(g.account_id, C)
+            print(f"  [{current_time}] 卖出后持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
+    
     buy_scores = g.strategy.generate_buy_signals_minute(current_date)
     
     if g.day_state['minute_counter'] <= 3 or len(buy_scores) != g.day_state['last_signal_count']:
@@ -318,9 +343,11 @@ def handlebar(C):
         if available_slots <= 0 or current_cash < 10000:
             break
         
-        price = minute_prices.get(stock_code, 0)
-        if price <= 0:
+        market_price = minute_prices.get(stock_code, 0)
+        if market_price <= 0:
             continue
+        
+        buy_price = market_price * (1 + SLIPPAGE_BUY)
         
         total_capital = current_cash + holding_market_value
         
@@ -334,17 +361,28 @@ def handlebar(C):
         if buy_amount < 10000:
             continue
         
-        volume = int(buy_amount / price / 100) * 100
+        volume = int(buy_amount / buy_price / 100) * 100
         
         if volume >= 100:
-            print(f"  [{current_time}] 买入 {stock_code}: 价格={price:.2f}, 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
+            print(f"  [{current_time}] 买入 {stock_code}: 市价={market_price:.2f}, 挂单价={buy_price:.2f} (+{SLIPPAGE_BUY*100:.1f}%), 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
             
-            g.trade_executor.buy(
-                g.account_id, stock_code, price, volume,
+            print(f"[DEBUG] 买入前持仓数: {len(current_holdings)}, {stock_code} 在持仓中: {stock_code in current_holdings}")
+            if stock_code in current_holdings:
+                print(f"[DEBUG]   已有 {stock_code} 数量: {current_holdings[stock_code].get('volume', 0)}")
+            
+            order_id = g.trade_executor.buy(
+                g.account_id, stock_code, buy_price, volume,
                 'momentum_strategy', f'buy_score_{score}', C
             )
+            print(f"[DEBUG] 买入下单返回 order_id: {order_id}")
             
-            g.strategy.on_buy(stock_code, price, volume, current_date, score, buy_time=current_timestamp_dt)
+            holdings_after_buy = g.trade_executor.get_holdings(g.account_id, C)
+            print(f"[DEBUG] 买入 {stock_code} 后立即查询持仓数: {len(holdings_after_buy)}")
+            print(f"[DEBUG] {stock_code} 是否在持仓中: {stock_code in holdings_after_buy}")
+            if stock_code in holdings_after_buy:
+                print(f"[DEBUG] {stock_code} 持仓数量: {holdings_after_buy[stock_code].get('volume', 0)}")
+            
+            g.strategy.on_buy(stock_code, buy_price, volume, current_date, score, buy_time=current_timestamp_dt)
             
             current_holdings = g.trade_executor.get_holdings(g.account_id, C)
             current_cash = g.trade_executor.get_cash(g.account_id, C)
@@ -368,7 +406,16 @@ if __name__ == '__main__':
         'start_time': BACKTEST_CONFIG['start_time'],
         'end_time': BACKTEST_CONFIG['end_time'],
         'trade_mode': 'backtest',
-        'quote_mode': 'history'
+        'quote_mode': 'history',
+        'backtest': {
+            'slippage_type': 2,
+            'slippage': 0.005,
+            'max_vol_rate': 0.5,
+            'open_commission': 0.0003,
+            'close_commission': 0.0003,
+            'close_tax': 0.001,
+            'min_commission': 5
+        }
     }
     
     user_script = sys.argv[0]

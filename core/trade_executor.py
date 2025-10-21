@@ -1,4 +1,6 @@
 # coding: utf-8
+from core.position_data_wrapper import PositionDataWrapper
+from core.account_data_wrapper import AccountDataWrapper
 
 
 class TradeExecutor:
@@ -49,10 +51,58 @@ class TradeExecutor:
                 print(f"[BACKTEST] BUY {stock_code} at {price:.2f}, volume={volume}")
                 return None
             
+            # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
+            try:
+                holdings_before = self.get_holdings(account, C)
+                pre_hold_vol = holdings_before.get(stock_code, {}).get('volume', 0)
+            except Exception:
+                holdings_before = {}
+                pre_hold_vol = None
+            try:
+                inst = C.get_instrument_detail(stock_code)
+                up_stop = inst.get('UpStopPrice', None)
+                down_stop = inst.get('DownStopPrice', None)
+            except Exception as e:
+                up_stop = None
+                down_stop = None
+                print(f"[DEBUG] 获取 {stock_code} 涨跌停价失败: {e}")
+            try:
+                is_susp = C.is_suspended_stock(stock_code, 1)
+            except Exception as e:
+                is_susp = None
+                print(f"[DEBUG] 检查 {stock_code} 停牌状态失败: {e}")
+            try:
+                print(
+                    f"[DEBUG] BUY passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
+                    f"quickTrade=1, prType=5, strategy={strategy_name}, remark={remark}"
+                )
+                print(
+                    f"[DEBUG] BacktestParams: slippage_type={getattr(C, 'slippage_type', None)}, "
+                    f"slippage={getattr(C, 'slippage', None)}, max_vol_rate={getattr(C, 'max_vol_rate', None)}"
+                )
+                print(
+                    f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
+                )
+            except Exception as e:
+                print(f"[DEBUG] 预下单日志失败: {e}")
+
             order_id = passorder(
-                23, 1102, account, stock_code, 11, float(price), volume,
+                23, 1102, account, stock_code, 5, float(price), volume,
                 strategy_name, 1, remark, C
             )
+            # Debug: 下单后立即回看该标的持仓
+            try:
+                holdings_after = self.get_holdings(account, C)
+                if stock_code in holdings_after:
+                    post_vol = holdings_after[stock_code].get('volume', 0)
+                    avail = holdings_after[stock_code].get('available', 0)
+                    print(f"[DEBUG] BUY后持仓: {stock_code} volume={post_vol}, available={avail}")
+                    if pre_hold_vol is not None:
+                        print(f"[DEBUG] BUY成交回看: 申报={volume}, 实际增持={post_vol - pre_hold_vol} (前持仓={pre_hold_vol})")
+                else:
+                    print(f"[DEBUG] BUY后持仓: {stock_code} 不在当前持仓中")
+            except Exception as e:
+                print(f"[DEBUG] BUY后查询持仓失败: {e}")
             return order_id
         
         elif self.mode == 'realtime':
@@ -96,10 +146,58 @@ class TradeExecutor:
                 print(f"[BACKTEST] SELL {stock_code} at {price:.2f}, volume={volume}")
                 return None
             
+            # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
+            try:
+                holdings_before = self.get_holdings(account, C)
+                pre_hold_vol = holdings_before.get(stock_code, {}).get('volume', 0)
+            except Exception:
+                holdings_before = {}
+                pre_hold_vol = None
+            try:
+                inst = C.get_instrument_detail(stock_code)
+                up_stop = inst.get('UpStopPrice', None)
+                down_stop = inst.get('DownStopPrice', None)
+            except Exception as e:
+                up_stop = None
+                down_stop = None
+                print(f"[DEBUG] 获取 {stock_code} 涨跌停价失败: {e}")
+            try:
+                is_susp = C.is_suspended_stock(stock_code, 1)
+            except Exception as e:
+                is_susp = None
+                print(f"[DEBUG] 检查 {stock_code} 停牌状态失败: {e}")
+            try:
+                print(
+                    f"[DEBUG] SELL passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
+                    f"quickTrade=1, prType=5, strategy={strategy_name}, remark={remark}"
+                )
+                print(
+                    f"[DEBUG] BacktestParams: slippage_type={getattr(C, 'slippage_type', None)}, "
+                    f"slippage={getattr(C, 'slippage', None)}, max_vol_rate={getattr(C, 'max_vol_rate', None)}"
+                )
+                print(
+                    f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
+                )
+            except Exception as e:
+                print(f"[DEBUG] 预下单日志失败: {e}")
+
             order_id = passorder(
-                24, 1101, account, stock_code, 11, float(price), volume,
+                24, 1101, account, stock_code, 5, float(price), volume,
                 strategy_name, 1, remark, C
             )
+            # Debug: 下单后立即回看该标的持仓
+            try:
+                holdings_after = self.get_holdings(account, C)
+                if stock_code in holdings_after:
+                    post_vol = holdings_after[stock_code].get('volume', 0)
+                    avail = holdings_after[stock_code].get('available', 0)
+                    print(f"[DEBUG] SELL后持仓: {stock_code} volume={post_vol}, available={avail}")
+                    if pre_hold_vol is not None:
+                        print(f"[DEBUG] SELL成交回看: 申报={volume}, 持仓变动={post_vol - pre_hold_vol} (前持仓={pre_hold_vol})")
+                else:
+                    print(f"[DEBUG] SELL后持仓: {stock_code} 不在当前持仓中")
+            except Exception as e:
+                print(f"[DEBUG] SELL后查询持仓失败: {e}")
             return order_id
         
         elif self.mode == 'realtime':
@@ -129,22 +227,11 @@ class TradeExecutor:
             dict: {stock_code: {'volume': xxx, 'cost': xxx, ...}}
         """
         if self.mode == 'backtest':
-            print(f"[DEBUG] get_holdings调用 - account={account}, C={C is not None}")
-            
             if C is None:
-                print("[DEBUG] C为None，返回空字典")
                 return {}
             
-            try:
-                from xtquant.qmttools.functions import get_trade_detail_data
-                print("[DEBUG] 成功导入get_trade_detail_data")
-            except ImportError as e:
-                print(f"[DEBUG] 导入失败: {e}")
-                return {}
-            
-            print(f"[DEBUG] 调用get_trade_detail_data(account={account}, type='stock', category='POSITION', strategy='momentum_strategy')")
-            result_list = get_trade_detail_data(account, 'stock', 'POSITION', 'momentum_strategy')
-            print(f"[DEBUG] result_list类型: {type(result_list)}, 长度: {len(result_list) if result_list else 0}")
+            position_wrapper = PositionDataWrapper(account, 'momentum_strategy')
+            result_list = position_wrapper.get_all_positions()
             
             holdings = {}
             for obj in result_list:
@@ -156,7 +243,6 @@ class TradeExecutor:
                     'available': obj.m_nCanUseVolume
                 }
             
-#            print(f"[DEBUG] 解析后的持仓: {holdings}")
             return holdings
         
         elif self.mode == 'realtime':
@@ -191,22 +277,10 @@ class TradeExecutor:
         """
         if self.mode == 'backtest':            
             if C is None:
-                print("[DEBUG] C为None，返回0")
                 return 0
             
-            try:
-                from xtquant.qmttools.functions import get_trade_detail_data
-                print("[DEBUG] 成功导入get_trade_detail_data")
-            except ImportError as e:
-                print(f"[DEBUG] 导入失败: {e}")
-                return 0
-            asset = get_trade_detail_data(account, 'stock', 'account', 'momentum_strategy')
-            if asset and len(asset) > 0:
-                available = asset[0].m_dAvailable
-                return available
-            else:
-                print("[DEBUG] asset为空或长度为0，返回0")
-            return 0
+            account_wrapper = AccountDataWrapper(account, 'momentum_strategy')
+            return account_wrapper.get_available_cash()
         
         elif self.mode == 'realtime':
             if self.xt_trader is None:
