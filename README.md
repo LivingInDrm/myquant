@@ -55,7 +55,8 @@
 ├── core/                    # 核心模块
 │   ├── data_provider.py     # 数据层
 │   ├── factor_calculator.py # 因子计算
-│   ├── position_manager.py  # 仓位管理
+│   ├── position_metadata.py # 持仓元数据管理
+│   ├── position_data_wrapper.py # 持仓数据访问
 │   └── trade_executor.py    # 交易执行
 ├── strategies/              # 策略
 │   └── momentum_strategy.py # 短期强势股策略

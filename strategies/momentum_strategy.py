@@ -1,25 +1,28 @@
 # coding: utf-8
 import pandas as pd
 import numpy as np
+from datetime import datetime
 from core.factor_calculator import FactorCalculator
-from core.position_manager import PositionManager
+from core.position_metadata import PositionMetadata
+from core.position_data_wrapper import PositionDataWrapper
 from utils.helpers import (
     filter_st_stocks, calc_minutes_since_open, 
     calc_daily_avg_volume_per_minute
 )
 from config.strategy_config import (
     BUY_CONDITION_1, BUY_CONDITION_2, MIN_LISTING_DAYS, MAX_POSITIONS,
-    DAILY_AVG_VOLUME_WINDOW_5D, DAILY_AVG_VOLUME_WINDOW_10D
+    DAILY_AVG_VOLUME_WINDOW_5D, DAILY_AVG_VOLUME_WINDOW_10D,
+    STOP_LOSS, MAX_HOLD_DAYS
 )
 
 
 class MomentumStrategy:
     """短期强势股策略"""
     
-    def __init__(self):
-        """初始化"""
+    def __init__(self, account=None, strategy_name=''):
         self.factor_calc = FactorCalculator()
-        self.position_mgr = PositionManager()
+        self.metadata_mgr = PositionMetadata()
+        self.position_wrapper = PositionDataWrapper(account, strategy_name) if account else None
         
         self.close_df = None
         self.open_df = None
@@ -367,20 +370,82 @@ class MomentumStrategy:
         
         return stock_list
     
-    def generate_sell_signals(self, current_prices, current_date):
+    def check_exit_conditions(self, stock_code, holding_dict, current_price, current_date):
+        metadata = self.metadata_mgr.get_metadata(stock_code)
+        
+        if not metadata:
+            buy_price = holding_dict['cost']
+            pct_change = (current_price - buy_price) / buy_price
+            
+            if pct_change >= 0.02:
+                return True, 'target_profit_no_metadata'
+            
+            if pct_change <= STOP_LOSS:
+                return True, 'stop_loss_no_metadata'
+            
+            return False, None
+        
+        buy_price = holding_dict['cost']
+        target_profit = metadata['target_profit']
+        
+        if isinstance(metadata['buy_date'], str):
+            buy_date = datetime.strptime(metadata['buy_date'], '%Y%m%d')
+        else:
+            buy_date = metadata['buy_date']
+        
+        if isinstance(current_date, str):
+            current_date = datetime.strptime(current_date, '%Y%m%d')
+        
+        hold_days = (current_date - buy_date).days
+        
+        pct_change = (current_price - buy_price) / buy_price
+        
+        if pct_change >= target_profit:
+            return True, 'target_profit'
+        
+        if pct_change <= STOP_LOSS:
+            return True, 'stop_loss'
+        
+        if hold_days > MAX_HOLD_DAYS:
+            return True, 'max_hold_days'
+        
+        return False, None
+    
+    def generate_sell_signals(self, current_prices, current_date, holdings_dict=None):
         """
         生成卖出信号
         
         Args:
             current_prices: 当前价格字典 {stock_code: price}
             current_date: 当前日期
+            holdings_dict: 持仓字典 {stock_code: {'cost': xxx, 'volume': xxx, ...}}
+                          如果为None，则使用position_wrapper获取
             
         Returns:
             dict: {stock_code: reason}
         """
-        exit_dict = self.position_mgr.check_all_exit_conditions(
-            current_prices, current_date
-        )
+        if holdings_dict is None:
+            if self.position_wrapper is None:
+                return {}
+            holdings_dict = {}
+            pos_dict = self.position_wrapper.get_position_dict()
+            for stock_code, pos in pos_dict.items():
+                holdings_dict[stock_code] = {
+                    'cost': pos.m_dOpenPrice,
+                    'volume': pos.m_nVolume,
+                    'available': pos.m_nCanUseVolume
+                }
+        
+        exit_dict = {}
+        
+        for stock_code in list(holdings_dict.keys()):
+            if stock_code in current_prices:
+                current_price = current_prices[stock_code]
+                should_exit, reason = self.check_exit_conditions(
+                    stock_code, holdings_dict[stock_code], current_price, current_date
+                )
+                if should_exit:
+                    exit_dict[stock_code] = reason
         
         return exit_dict
     
@@ -410,23 +475,21 @@ class MomentumStrategy:
         
         score = max(8, min(20, score))
         
-        amount = self.position_mgr.calc_position_size(score, total_capital)
+        amount = self.metadata_mgr.calc_position_size(score, total_capital)
         
         return amount, score
     
-    def on_buy(self, stock_code, price, volume, date, score, buy_time=None):
+    def on_buy(self, stock_code, date, score, buy_time=None):
         """
         买入成功回调
         
         Args:
             stock_code: 股票代码
-            price: 买入价格
-            volume: 买入数量
             date: 买入日期
             score: 得分
             buy_time: 买入时间戳（datetime，可选）
         """
-        self.position_mgr.add_holding(stock_code, price, volume, date, score, buy_time)
+        self.metadata_mgr.add_metadata(stock_code, date, score, buy_time)
     
     def on_sell(self, stock_code):
         """
@@ -435,16 +498,28 @@ class MomentumStrategy:
         Args:
             stock_code: 股票代码
         """
-        self.position_mgr.remove_holding(stock_code)
+        self.metadata_mgr.remove_metadata(stock_code)
     
     def get_holdings(self):
         """
-        获取当前持仓
+        获取当前持仓（从真实持仓数据源）
         
         Returns:
-            dict: 持仓字典
+            dict: 持仓字典 {stock_code: {'cost': xxx, 'volume': xxx, ...}}
         """
-        return self.position_mgr.get_all_holdings()
+        if self.position_wrapper is None:
+            return {}
+        
+        holdings_dict = {}
+        pos_dict = self.position_wrapper.get_position_dict()
+        for stock_code, pos in pos_dict.items():
+            holdings_dict[stock_code] = {
+                'cost': pos.m_dOpenPrice,
+                'volume': pos.m_nVolume,
+                'available': pos.m_nCanUseVolume,
+                'float_profit': pos.m_dFloatProfit
+            }
+        return holdings_dict
     
     def get_position_count(self):
         """
@@ -453,4 +528,42 @@ class MomentumStrategy:
         Returns:
             int: 持仓数量
         """
-        return self.position_mgr.get_position_count()
+        if self.position_wrapper is None:
+            return len(self.metadata_mgr.get_all_metadata())
+        return len(self.position_wrapper.get_position_dict())
+    
+    def sync_metadata_with_holdings(self):
+        """
+        对账：同步元数据与真实持仓
+        
+        清理已卖出但元数据未删除的股票
+        检测并预警缺少元数据的持仓
+        
+        建议调用时机：每个bar开始时
+        
+        Returns:
+            dict: {'removed': int, 'missing': int}
+        """
+        if self.position_wrapper is None:
+            return {'removed': 0, 'missing': 0}
+        
+        real_holdings = self.position_wrapper.get_position_dict()
+        metadata_holdings = self.metadata_mgr.get_all_metadata()
+        
+        removed_count = 0
+        for stock_code in list(metadata_holdings.keys()):
+            if stock_code not in real_holdings:
+                self.metadata_mgr.remove_metadata(stock_code)
+                removed_count += 1
+        
+        missing_count = 0
+        for stock_code in real_holdings.keys():
+            if stock_code not in metadata_holdings:
+                missing_count += 1
+        
+        if removed_count > 0:
+            print(f"[对账] 清理 {removed_count} 条元数据（持仓已不存在）")
+        if missing_count > 0:
+            print(f"[对账警告] {missing_count} 个持仓缺少元数据，将使用保守退出策略")
+        
+        return {'removed': removed_count, 'missing': missing_count}

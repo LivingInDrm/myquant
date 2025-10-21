@@ -74,11 +74,16 @@ class TradeExecutor:
             try:
                 print(
                     f"[DEBUG] BUY passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
-                    f"quickTrade=1, prType=5, strategy={strategy_name}, remark={remark}"
+                    f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
                 )
                 print(
                     f"[DEBUG] BacktestParams: slippage_type={getattr(C, 'slippage_type', None)}, "
                     f"slippage={getattr(C, 'slippage', None)}, max_vol_rate={getattr(C, 'max_vol_rate', None)}"
+                )
+                print(
+                    f"[DEBUG] ContextInfo: period={getattr(C, 'period', None)}, "
+                    f"barpos={getattr(C, 'barpos', None)}, "
+                    f"bar_timetag={C.get_bar_timetag(C.barpos) if hasattr(C, 'barpos') else None}"
                 )
                 print(
                     f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
@@ -87,8 +92,8 @@ class TradeExecutor:
                 print(f"[DEBUG] 预下单日志失败: {e}")
 
             order_id = passorder(
-                23, 1102, account, stock_code, 5, float(price), volume,
-                strategy_name, 1, remark, C
+                23, 1101, account, stock_code, 11, float(price), volume,
+                strategy_name, 0, remark, C
             )
             # Debug: 下单后立即回看该标的持仓
             try:
@@ -169,7 +174,7 @@ class TradeExecutor:
             try:
                 print(
                     f"[DEBUG] SELL passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
-                    f"quickTrade=1, prType=5, strategy={strategy_name}, remark={remark}"
+                    f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
                 )
                 print(
                     f"[DEBUG] BacktestParams: slippage_type={getattr(C, 'slippage_type', None)}, "
@@ -182,8 +187,8 @@ class TradeExecutor:
                 print(f"[DEBUG] 预下单日志失败: {e}")
 
             order_id = passorder(
-                24, 1101, account, stock_code, 5, float(price), volume,
-                strategy_name, 1, remark, C
+                24, 1101, account, stock_code, 11, float(price), volume,
+                strategy_name, 0, remark, C
             )
             # Debug: 下单后立即回看该标的持仓
             try:

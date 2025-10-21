@@ -62,7 +62,7 @@ class RealtimeTrading:
         
         self.data_provider = DataProvider(batch_size=500)
         self.trade_executor = TradeExecutor(mode='realtime')
-        self.strategy = MomentumStrategy()
+        self.strategy = MomentumStrategy(account=account_id, strategy_name='momentum_strategy')
         
         self.stock_list = []
         self.last_update_date = None
@@ -161,20 +161,24 @@ class RealtimeTrading:
         print(f"执行交易: {today}")
         print("=" * 60)
         
+        self.strategy.sync_metadata_with_holdings()
+        
         current_holdings = self.trade_executor.get_holdings(self.account)
         current_cash = self.trade_executor.get_cash(self.account)
         
         print(f"当前持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
         
         current_prices = {}
+        current_tick_data = {}
         for stock_code in self.stock_list:
             tick = xtdata.get_full_tick([stock_code])
             if stock_code in tick:
                 price = tick[stock_code].get('lastPrice', 0)
                 if price > 0:
                     current_prices[stock_code] = price
+                    current_tick_data[stock_code] = tick[stock_code]
         
-        exit_dict = self.strategy.generate_sell_signals(current_prices, today)
+        exit_dict = self.strategy.generate_sell_signals(current_prices, today, holdings_dict=current_holdings)
         
         if exit_dict:
             print(f"\n卖出信号: {len(exit_dict)} 只股票")
@@ -200,6 +204,13 @@ class RealtimeTrading:
         current_cash = self.trade_executor.get_cash(self.account)
         
         available_slots = MAX_POSITIONS - len(current_holdings)
+        
+        # 时间过滤：09:35之前不交易
+        now = datetime.now()
+        current_time_value = now.hour * 60 + now.minute
+        if current_time_value < 9 * 60 + 35:  # 9:35 = 575分钟
+            print(f"[{now.strftime('%H:%M')}] 09:35之前不交易，跳过买入")
+            return
         
         if available_slots > 0 and current_cash > 10000:
             print(f"\n生成买入信号...")
@@ -240,12 +251,65 @@ class RealtimeTrading:
                         if volume >= 100:
                             print(f"  买入 {stock_code}: 价格={price:.2f}, 数量={volume}, 得分={score}")
                             
+                            print("=" * 60)
+                            print(f"[买入前调试信息] {stock_code}")
+                            print("-" * 60)
+                            print(f"[股票信息]")
+                            print(f"  代码: {stock_code}")
+                            print(f"  价格: {price:.2f}")
+                            print(f"  数量: {volume}")
+                            print(f"  评分: {score:.2f}")
+                            
+                            print(f"[实时行情]")
+                            if stock_code in current_tick_data:
+                                tick = current_tick_data[stock_code]
+                                print(f"  最新价: {tick.get('lastPrice', 0):.2f}")
+                                print(f"  开盘价: {tick.get('open', 0):.2f}")
+                                print(f"  最高价: {tick.get('high', 0):.2f}")
+                                print(f"  最低价: {tick.get('low', 0):.2f}")
+                                print(f"  成交量: {tick.get('volume', 0):,.0f}")
+                                print(f"  成交额: {tick.get('amount', 0):,.2f}")
+                                open_price = tick.get('open', 0)
+                                high_price = tick.get('high', 0)
+                                low_price = tick.get('low', 0)
+                                if open_price > 0:
+                                    print(f"  振幅: {((high_price - low_price) / open_price * 100):.2f}%")
+                            else:
+                                print("  无实时行情数据")
+                            
+                            holding_market_value = sum(
+                                h['volume'] * current_prices.get(s, 0) 
+                                for s, h in current_holdings.items()
+                            )
+                            
+                            print(f"[账户信息]")
+                            print(f"  可用资金: {current_cash:.2f}")
+                            print(f"  总资产: {total_capital:.2f}")
+                            print(f"  持仓市值: {holding_market_value:.2f}")
+                            print(f"  资金使用率: {(holding_market_value/total_capital*100 if total_capital > 0 else 0):.2f}%")
+                            
+                            print(f"[持仓元数据]")
+                            all_metadata = self.strategy.metadata_mgr.get_all_metadata()
+                            if all_metadata:
+                                for code, meta in all_metadata.items():
+                                    print(f"  {code}: 买入日期={meta.get('buy_date')}, 评分={meta.get('score')}, 目标收益={meta.get('target_profit', 0)*100:.2f}%")
+                            else:
+                                print("  当前无持仓元数据")
+                            
+                            print(f"[当前持仓]")
+                            if current_holdings:
+                                for code, pos in current_holdings.items():
+                                    print(f"  {code}: 数量={pos.get('volume', 0)}, 成本={pos.get('cost', 0):.2f}, 可用={pos.get('available', 0)}")
+                            else:
+                                print("  当前无持仓")
+                            print("=" * 60)
+                            
                             self.trade_executor.buy(
                                 self.account, stock_code, price, volume,
                                 'momentum_strategy', f'buy_score_{score}'
                             )
                             
-                            self.strategy.on_buy(stock_code, price, volume, today, score)
+                            self.strategy.on_buy(stock_code, today, score)
                             
                             current_cash -= volume * price
                             

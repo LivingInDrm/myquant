@@ -19,7 +19,7 @@ class DataProvider:
         self.cache = {}
     
     def get_daily_data(self, stock_list, start_time, end_time, 
-                      fields=None, dividend_type='front', fill_data=True):
+                      fields=None, dividend_type='front_ratio', fill_data=True):
         """
         批量获取日线数据
         
@@ -28,7 +28,8 @@ class DataProvider:
             start_time: 开始日期，如'20230101'
             end_time: 结束日期，如'20241231'
             fields: 字段列表，None表示全部字段
-            dividend_type: 复权类型 'none', 'front', 'back'
+            dividend_type: 复权类型 'none', 'front', 'back', 'front_ratio', 'back_ratio'
+                          默认'front_ratio'等比前复权，与官方示例保持一致
             fill_data: 是否填充停牌数据
             
         Returns:
@@ -79,7 +80,7 @@ class DataProvider:
         self.cache[cache_key] = data
         return data
     
-    def get_minute_data(self, stock_list, date, period='5m', fields=None):
+    def get_minute_data(self, stock_list, date, period='5m', fields=None, dividend_type='front_ratio'):
         """
         获取分钟线数据
         
@@ -88,6 +89,8 @@ class DataProvider:
             date: 日期，如'20230101'
             period: 周期 '1m', '5m', '15m', '30m', '60m'
             fields: 字段列表
+            dividend_type: 复权类型 'none', 'front', 'back', 'front_ratio', 'back_ratio'
+                          默认'front_ratio'等比前复权，与日线数据保持一致
             
         Returns:
             dict: {stock_code: DataFrame}
@@ -101,6 +104,7 @@ class DataProvider:
             period=period,
             start_time=date,
             end_time=date,
+            dividend_type=dividend_type,
             fill_data=True
         )
         

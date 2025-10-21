@@ -45,7 +45,7 @@ passorder(opType, orderType, accountid,
 def place_buy(C, account, stock_code, price, volume):
     passorder(
         23,                # buy
-        1102,              # stock buy type
+        1101,              # stock buy type
         account,
         stock_code,
         11,                # limit price
