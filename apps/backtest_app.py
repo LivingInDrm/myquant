@@ -4,6 +4,11 @@ import io
 import os
 from datetime import datetime as dt_now
 
+# 添加项目根目录到 Python 路径，以便导入 xtquant 等模块
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # 创建UTF-8编码的日志文件（单例模式，避免重复创建）
 if not hasattr(sys, '_backtest_log_initialized'):
     log_file_path = f"backtest_log_{dt_now.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -27,9 +32,9 @@ import numpy as np
 from datetime import datetime
 from xtquant import xtdata
 
-from core.data_provider import DataProvider
+from data.data_provider import DataProvider
 from core.trade_executor import TradeExecutor
-from strategies.momentum_strategy import MomentumStrategy
+from strategies.momentum.strategy import MomentumStrategy
 from utils.helpers import get_df_ex, filter_opendate, timetag_to_datetime
 from config.strategy_config import MAX_POSITIONS, STOCK_POOL
 from config.backtest_config import load_backtest_config

@@ -1,15 +1,22 @@
 # coding: utf-8
 import sys
+import os
 import time
 from datetime import datetime
 import pandas as pd
+
+# 添加项目根目录到 Python 路径，以便导入 xtquant 等模块
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from xtquant.xttrader import XtQuantTrader, XtQuantTraderCallback
 from xtquant.xttype import StockAccount
 from xtquant import xtconstant, xtdata
 
-from core.data_provider import DataProvider
+from data.data_provider import DataProvider
 from core.trade_executor import TradeExecutor
-from strategies.momentum_strategy import MomentumStrategy
+from strategies.momentum.strategy import MomentumStrategy
 from utils.helpers import get_df_ex, filter_opendate
 from config.strategy_config import MAX_POSITIONS
 

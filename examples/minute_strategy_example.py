@@ -4,10 +4,18 @@
 
 演示如何使用升级后的分钟级扫描功能
 """
+import sys
+import os
+
+# 添加项目根目录到 Python 路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import pandas as pd
 from datetime import datetime
-from strategies.momentum_strategy import MomentumStrategy
-from core.data_loader import DataLoader
+from strategies.momentum.strategy import MomentumStrategy
+from data.data_loader import DataLoader
 from utils.helpers import calc_minutes_since_open
 
 

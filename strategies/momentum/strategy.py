@@ -2,8 +2,8 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from core.factor_calculator import FactorCalculator
-from core.position_metadata import PositionMetadata
+from factors.factor_calculator import FactorCalculator
+from .position_metadata import PositionMetadata
 from core.position_data_wrapper import PositionDataWrapper
 from utils.helpers import (
     filter_st_stocks, calc_minutes_since_open, 

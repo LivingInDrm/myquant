@@ -1,0 +1,64 @@
+# 动量策略配置
+# Momentum Strategy Configuration
+
+strategy:
+  name: "短期强势股动量策略"
+  description: "基于价格动量、成交量突破和上升趋势评分的短线交易策略"
+
+# 股票池
+stock_pool: "沪深A股"
+
+# 买入条件1：价格动量
+buy_condition_1:
+  consecutive_up_days: 5      # 连续上涨天数
+  or_days: 3                  # 或：N日累计涨幅
+  or_pct_change: 6.0          # 或：涨幅阈值（百分比）
+
+# 买入条件2：成交量突破
+buy_condition_2:
+  early_minutes: 30           # 开盘早期时间（分钟）
+  early_volume_ratio: 8       # 早期量比阈值
+  early_amount: 30000000      # 早期成交额阈值（元）
+  late_volume_ratio: 3        # 后期量比阈值
+  late_amount: 50000000       # 后期成交额阈值（元）
+
+# 上升趋势评分权重（0-20分）
+uptrend_score_weights:
+  price_break_ma: 5           # 突破均线（5/10/20/30/60）
+  new_highs: 5                # 创新高（20/40/60/80/100日）
+  ma_arrangement: 5           # 均线排列
+  volume_expansion: 5         # 成交量放大
+
+# 仓位管理：根据评分决定仓位大小
+position_sizing:
+  8: 0.02     # 评分8：2%仓位
+  10: 0.025   # 评分10：2.5%仓位
+  12: 0.03    # 评分12：3%仓位
+  14: 0.035   # 评分14：3.5%仓位
+  16: 0.04    # 评分16：4%仓位
+  18: 0.045   # 评分18：4.5%仓位
+  20: 0.05    # 评分20：5%仓位
+
+# 目标收益率：根据评分决定止盈点
+target_profit:
+  8: 0.02     # 评分8：2%止盈
+  10: 0.025   # 评分10：2.5%止盈
+  12: 0.03    # 评分12：3%止盈
+  14: 0.035   # 评分14：3.5%止盈
+  16: 0.04    # 评分16：4%止盈
+  18: 0.045   # 评分18：4.5%止盈
+  20: 0.05    # 评分20：5%止盈
+
+# 风险控制
+risk_control:
+  stop_loss: -0.03            # 止损线（-3%）
+  max_hold_days: 3            # 最大持仓天数
+  min_listing_days: 120       # 最小上市天数（过滤新股）
+  max_positions: 20           # 最大持仓数量
+
+# 分钟级参数
+minute_level:
+  enabled: true               # 是否启用分钟级扫描
+  avg_volume_window_5d: 5     # 5日平均成交量窗口
+  avg_volume_window_10d: 10   # 10日平均成交量窗口
+  trading_minutes_per_day: 240  # 每日交易分钟数
