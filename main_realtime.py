@@ -61,7 +61,7 @@ class RealtimeTrading:
         self.account = None
         
         self.data_provider = DataProvider(batch_size=500)
-        self.trade_executor = TradeExecutor(mode='realtime')
+        self.trade_executor = TradeExecutor(mode='realtime', strategy_name='momentum_strategy')
         self.strategy = MomentumStrategy(account=account_id, strategy_name='momentum_strategy')
         
         self.stock_list = []

@@ -292,9 +292,9 @@ class FactorCalculator:
         
         return cond
     
-    def calc_minute_score(self, current_price, current_minute_volume, 
+    def calc_minute_score(self, current_price, cumulative_volume, 
                          daily_ma_dict, daily_rolling_max_dict, 
-                         past_10d_avg_vol_per_min):
+                         past_10d_avg_daily_volume):
         """
         计算分钟级上涨趋势得分（0-20分）
         
@@ -302,14 +302,14 @@ class FactorCalculator:
         1. 价格突破MA（5/10/20/30/60日）：5项，每项1分
         2. 创新高（20/40/60/80/100日）：5项，每项1分
         3. 均线排列：5项，每项1分（使用日线MA）
-        4. 成交量放大（当前分钟量 > 过去10日平均每分钟量的3/4/5/6/7倍）：5项，每项1分
+        4. 成交量放大（截止前一分钟累积成交量 > 过去10日平均日成交量的3/4/5/6/7倍）：5项，每项1分
         
         Args:
             current_price: 当前分钟价格（标量或Series）
-            current_minute_volume: 当前分钟成交量（标量或Series）
+            cumulative_volume: 截止前一分钟的累积成交量（标量或Series）
             daily_ma_dict: 日线MA字典 {period: value}
             daily_rolling_max_dict: 日线历史最高价字典 {period: value}
-            past_10d_avg_vol_per_min: 过去10日平均每分钟成交量（标量或Series）
+            past_10d_avg_daily_volume: 过去10日平均日成交量（标量或Series）
             
         Returns:
             int或Series: 得分（0-20）
@@ -339,9 +339,9 @@ class FactorCalculator:
                     score += (daily_ma_dict[short] > daily_ma_dict[long]).astype(int)
         
         for multiple in [3, 4, 5, 6, 7]:
-            if isinstance(current_minute_volume, (int, float)):
-                score += 1 if current_minute_volume > (past_10d_avg_vol_per_min * multiple) else 0
+            if isinstance(cumulative_volume, (int, float)):
+                score += 1 if cumulative_volume > (past_10d_avg_daily_volume * multiple) else 0
             else:
-                score += (current_minute_volume > (past_10d_avg_vol_per_min * multiple)).astype(int)
+                score += (cumulative_volume > (past_10d_avg_daily_volume * multiple)).astype(int)
         
         return score

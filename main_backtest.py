@@ -60,7 +60,7 @@ def init(C):
     g.account_id = 'test'
     
     g.data_provider = DataProvider(batch_size=500)
-    g.trade_executor = TradeExecutor(mode='backtest')
+    g.trade_executor = TradeExecutor(mode='backtest', strategy_name='momentum_strategy')
     g.strategy = MomentumStrategy(account=g.account_id, strategy_name='momentum_strategy')
     
     g.stock_list = C.get_stock_list_in_sector(g.stock_pool_name)

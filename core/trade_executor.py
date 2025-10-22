@@ -6,14 +6,16 @@ from core.account_data_wrapper import AccountDataWrapper
 class TradeExecutor:
     """交易执行层，封装下单、撤单逻辑"""
     
-    def __init__(self, mode='backtest'):
+    def __init__(self, mode='backtest', strategy_name=''):
         """
         初始化
         
         Args:
             mode: 'backtest' 或 'realtime'
+            strategy_name: 策略名称（回测模式需要）
         """
         self.mode = mode
+        self.strategy_name = strategy_name
         self.xt_trader = None
     
     def set_xt_trader(self, xt_trader):
@@ -235,7 +237,7 @@ class TradeExecutor:
             if C is None:
                 return {}
             
-            position_wrapper = PositionDataWrapper(account, 'momentum_strategy')
+            position_wrapper = PositionDataWrapper(account, self.strategy_name)
             result_list = position_wrapper.get_all_positions()
             
             holdings = {}
@@ -284,7 +286,7 @@ class TradeExecutor:
             if C is None:
                 return 0
             
-            account_wrapper = AccountDataWrapper(account, 'momentum_strategy')
+            account_wrapper = AccountDataWrapper(account, self.strategy_name)
             return account_wrapper.get_available_cash()
         
         elif self.mode == 'realtime':

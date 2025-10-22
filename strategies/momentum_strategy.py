@@ -104,6 +104,10 @@ class MomentumStrategy:
             volume_df, window=DAILY_AVG_VOLUME_WINDOW_10D
         ).shift(1)
         
+        self.daily_avg_volume_10d = volume_df.rolling(
+            window=DAILY_AVG_VOLUME_WINDOW_10D, min_periods=DAILY_AVG_VOLUME_WINDOW_10D
+        ).mean().shift(1)
+        
         if listing_filter_df is not None:
             self.listing_filter_df = listing_filter_df
         
@@ -171,11 +175,11 @@ class MomentumStrategy:
             if pd.isna(price) or price <= 0:
                 continue
             
+            cum_volume_prev = self.minute_cache[stock_code]['cum_volume']
+            cum_amount_prev = self.minute_cache[stock_code]['cum_amount']
+            
             self.minute_cache[stock_code]['cum_volume'] += volume
             self.minute_cache[stock_code]['cum_amount'] += amount
-            
-            cum_volume = self.minute_cache[stock_code]['cum_volume']
-            cum_amount = self.minute_cache[stock_code]['cum_amount']
             
             try:
                 if stock_code not in self.daily_avg_vol_per_min_5d.columns:
@@ -187,11 +191,11 @@ class MomentumStrategy:
                 continue
             
             volume_ratio = self.factor_calc.calc_intraday_volume_ratio(
-                cum_volume, minutes_since_open, avg_vol_per_min_5d
+                cum_volume_prev, minutes_since_open, avg_vol_per_min_5d
             )
             
             buy_cond2 = self.factor_calc.calc_buy_condition_2_intraday(
-                volume_ratio, cum_amount, minutes_since_open
+                volume_ratio, cum_amount_prev, minutes_since_open
             )
             self.minute_buy_cond2[stock_code] = buy_cond2
             
@@ -217,16 +221,16 @@ class MomentumStrategy:
                 continue
             
             try:
-                if stock_code not in self.daily_avg_vol_per_min_10d.columns:
+                if stock_code not in self.daily_avg_volume_10d.columns:
                     continue
-                avg_vol_per_min_10d = self.daily_avg_vol_per_min_10d.loc[date, stock_code]
-                if pd.isna(avg_vol_per_min_10d) or avg_vol_per_min_10d <= 0:
-                    avg_vol_per_min_10d = 1
+                avg_volume_10d = self.daily_avg_volume_10d.loc[date, stock_code]
+                if pd.isna(avg_volume_10d) or avg_volume_10d <= 0:
+                    avg_volume_10d = 1
             except (KeyError, IndexError):
-                avg_vol_per_min_10d = 1
+                avg_volume_10d = 1
             
             score = self.factor_calc.calc_minute_score(
-                price, volume, daily_ma, daily_rolling_max, avg_vol_per_min_10d
+                price, cum_volume_prev, daily_ma, daily_rolling_max, avg_volume_10d
             )
             self.minute_scores[stock_code] = score
     

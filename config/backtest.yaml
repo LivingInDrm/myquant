@@ -78,7 +78,7 @@ backtest:
   #   - 单笔订单不能超过市场成交量的比例
   #   - 0.1 表示最多吃掉 10% 的市场成交量
   #   - 0 表示不限制
-  max_vol_rate: 0
+  max_vol_rate: 0.05
 
   # comsisson_type: 佣金类型
   #   - 0: 按金额比例
