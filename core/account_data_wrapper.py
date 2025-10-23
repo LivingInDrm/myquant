@@ -140,7 +140,7 @@ class AccountDataWrapper:
         
         Returns:
             float: 总资产（元）
-                - 正常情况：返回账户的 m_dTotalAsset 字段值
+                - 正常情况：返回账户的 m_dBalance 字段值
                 - 查询失败：返回 0.0
         
         使用示例：
@@ -155,7 +155,15 @@ class AccountDataWrapper:
         account_data = self.get_account_data()
         
         if account_data:
-            return account_data.m_dTotalAsset
+            if hasattr(account_data, 'm_dBalance'):
+                return account_data.m_dBalance
+            elif hasattr(account_data, 'm_dTotalAsset'):
+                return account_data.m_dTotalAsset
+            else:
+                available = getattr(account_data, 'm_dAvailable', 0)
+                frozen = getattr(account_data, 'm_dFrozenCash', 0)
+                market_value = getattr(account_data, 'm_dMarketValue', 0)
+                return available + frozen + market_value
         
         return 0.0
     
