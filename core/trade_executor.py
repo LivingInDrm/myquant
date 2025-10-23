@@ -17,6 +17,7 @@ class TradeExecutor:
         self.mode = mode
         self.strategy_name = strategy_name
         self.xt_trader = None
+        self.context = None
     
     def set_xt_trader(self, xt_trader):
         """
@@ -26,6 +27,15 @@ class TradeExecutor:
             xt_trader: XtQuantTrader对象
         """
         self.xt_trader = xt_trader
+    
+    def set_context(self, context):
+        """
+        设置回测上下文对象
+        
+        Args:
+            context: contextinfo对象（回测专用）
+        """
+        self.context = context
     
     def buy(self, account, stock_code, price, volume, strategy_name='', remark='', C=None):
         """
@@ -38,14 +48,15 @@ class TradeExecutor:
             volume: 数量（股数）
             strategy_name: 策略名称
             remark: 备注
-            C: 回测contextinfo对象（回测模式必须）
+            C: 回测contextinfo对象（可选，优先使用内部context）
             
         Returns:
             订单ID或订单序号
         """
         if self.mode == 'backtest':
-            if C is None:
-                raise ValueError("回测模式必须提供contextinfo对象C")
+            context = C if C is not None else self.context
+            if context is None:
+                raise ValueError("回测模式必须提供contextinfo对象")
             
             try:
                 from xtquant.qmttools.functions import passorder
@@ -55,13 +66,13 @@ class TradeExecutor:
             
             # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
             try:
-                holdings_before = self.get_holdings(account, C)
+                holdings_before = self.get_holdings(account, context)
                 pre_hold_vol = holdings_before.get(stock_code, {}).get('volume', 0)
             except Exception:
                 holdings_before = {}
                 pre_hold_vol = None
             try:
-                inst = C.get_instrument_detail(stock_code)
+                inst = context.get_instrument_detail(stock_code)
                 up_stop = inst.get('UpStopPrice', None)
                 down_stop = inst.get('DownStopPrice', None)
             except Exception as e:
@@ -69,7 +80,7 @@ class TradeExecutor:
                 down_stop = None
                 print(f"[DEBUG] 获取 {stock_code} 涨跌停价失败: {e}")
             try:
-                is_susp = C.is_suspended_stock(stock_code, 1)
+                is_susp = context.is_suspended_stock(stock_code, 1)
             except Exception as e:
                 is_susp = None
                 print(f"[DEBUG] 检查 {stock_code} 停牌状态失败: {e}")
@@ -79,13 +90,13 @@ class TradeExecutor:
                     f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
                 )
                 print(
-                    f"[DEBUG] BacktestParams: slippage_type={getattr(C, 'slippage_type', None)}, "
-                    f"slippage={getattr(C, 'slippage', None)}, max_vol_rate={getattr(C, 'max_vol_rate', None)}"
+                    f"[DEBUG] BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
+                    f"slippage={getattr(context, 'slippage', None)}, max_vol_rate={getattr(context, 'max_vol_rate', None)}"
                 )
                 print(
-                    f"[DEBUG] ContextInfo: period={getattr(C, 'period', None)}, "
-                    f"barpos={getattr(C, 'barpos', None)}, "
-                    f"bar_timetag={C.get_bar_timetag(C.barpos) if hasattr(C, 'barpos') else None}"
+                    f"[DEBUG] ContextInfo: period={getattr(context, 'period', None)}, "
+                    f"barpos={getattr(context, 'barpos', None)}, "
+                    f"bar_timetag={context.get_bar_timetag(context.barpos) if hasattr(context, 'barpos') else None}"
                 )
                 print(
                     f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
@@ -95,11 +106,11 @@ class TradeExecutor:
 
             order_id = passorder(
                 23, 1101, account, stock_code, 11, float(price), volume,
-                strategy_name, 0, remark, C
+                strategy_name, 0, remark, context
             )
             # Debug: 下单后立即回看该标的持仓
             try:
-                holdings_after = self.get_holdings(account, C)
+                holdings_after = self.get_holdings(account, context)
                 if stock_code in holdings_after:
                     post_vol = holdings_after[stock_code].get('volume', 0)
                     avail = holdings_after[stock_code].get('available', 0)
@@ -138,14 +149,15 @@ class TradeExecutor:
             volume: 数量（股数）
             strategy_name: 策略名称
             remark: 备注
-            C: 回测contextinfo对象（回测模式必须）
+            C: 回测contextinfo对象（可选，优先使用内部context）
             
         Returns:
             订单ID或订单序号
         """
         if self.mode == 'backtest':
-            if C is None:
-                raise ValueError("回测模式必须提供contextinfo对象C")
+            context = C if C is not None else self.context
+            if context is None:
+                raise ValueError("回测模式必须提供contextinfo对象")
             
             try:
                 from xtquant.qmttools.functions import passorder
@@ -155,13 +167,13 @@ class TradeExecutor:
             
             # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
             try:
-                holdings_before = self.get_holdings(account, C)
+                holdings_before = self.get_holdings(account, context)
                 pre_hold_vol = holdings_before.get(stock_code, {}).get('volume', 0)
             except Exception:
                 holdings_before = {}
                 pre_hold_vol = None
             try:
-                inst = C.get_instrument_detail(stock_code)
+                inst = context.get_instrument_detail(stock_code)
                 up_stop = inst.get('UpStopPrice', None)
                 down_stop = inst.get('DownStopPrice', None)
             except Exception as e:
@@ -169,7 +181,7 @@ class TradeExecutor:
                 down_stop = None
                 print(f"[DEBUG] 获取 {stock_code} 涨跌停价失败: {e}")
             try:
-                is_susp = C.is_suspended_stock(stock_code, 1)
+                is_susp = context.is_suspended_stock(stock_code, 1)
             except Exception as e:
                 is_susp = None
                 print(f"[DEBUG] 检查 {stock_code} 停牌状态失败: {e}")
@@ -179,8 +191,8 @@ class TradeExecutor:
                     f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
                 )
                 print(
-                    f"[DEBUG] BacktestParams: slippage_type={getattr(C, 'slippage_type', None)}, "
-                    f"slippage={getattr(C, 'slippage', None)}, max_vol_rate={getattr(C, 'max_vol_rate', None)}"
+                    f"[DEBUG] BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
+                    f"slippage={getattr(context, 'slippage', None)}, max_vol_rate={getattr(context, 'max_vol_rate', None)}"
                 )
                 print(
                     f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
@@ -190,11 +202,11 @@ class TradeExecutor:
 
             order_id = passorder(
                 24, 1101, account, stock_code, 11, float(price), volume,
-                strategy_name, 0, remark, C
+                strategy_name, 0, remark, context
             )
             # Debug: 下单后立即回看该标的持仓
             try:
-                holdings_after = self.get_holdings(account, C)
+                holdings_after = self.get_holdings(account, context)
                 if stock_code in holdings_after:
                     post_vol = holdings_after[stock_code].get('volume', 0)
                     avail = holdings_after[stock_code].get('available', 0)
@@ -228,13 +240,14 @@ class TradeExecutor:
         
         Args:
             account: 账户对象或账户ID
-            C: 回测contextinfo对象（回测模式可选）
+            C: 回测contextinfo对象（可选，优先使用内部context）
             
         Returns:
             dict: {stock_code: {'volume': xxx, 'cost': xxx, ...}}
         """
         if self.mode == 'backtest':
-            if C is None:
+            context = C if C is not None else self.context
+            if context is None:
                 return {}
             
             position_wrapper = PositionDataWrapper(account, self.strategy_name)
@@ -277,13 +290,14 @@ class TradeExecutor:
         
         Args:
             account: 账户对象或账户ID
-            C: 回测contextinfo对象（回测模式可选）
+            C: 回测contextinfo对象（可选，优先使用内部context）
             
         Returns:
             float: 可用资金
         """
-        if self.mode == 'backtest':            
-            if C is None:
+        if self.mode == 'backtest':
+            context = C if C is not None else self.context
+            if context is None:
                 return 0
             
             account_wrapper = AccountDataWrapper(account, self.strategy_name)
@@ -296,6 +310,37 @@ class TradeExecutor:
             asset = self.xt_trader.query_stock_asset(account)
             if asset:
                 return asset.cash
+            return 0
+        
+        else:
+            raise ValueError(f"Unsupported mode: {self.mode}")
+    
+    def get_total_asset(self, account, C=None):
+        """
+        获取总资产（可用资金 + 冻结资金 + 持仓市值）
+        
+        Args:
+            account: 账户对象或账户ID
+            C: 回测contextinfo对象（可选，优先使用内部context）
+            
+        Returns:
+            float: 总资产
+        """
+        if self.mode == 'backtest':
+            context = C if C is not None else self.context
+            if context is None:
+                return 0
+            
+            account_wrapper = AccountDataWrapper(account, self.strategy_name)
+            return account_wrapper.get_total_asset()
+        
+        elif self.mode == 'realtime':
+            if self.xt_trader is None:
+                raise ValueError("实盘模式必须先设置xt_trader")
+            
+            asset = self.xt_trader.query_stock_asset(account)
+            if asset:
+                return asset.total_asset
             return 0
         
         else:

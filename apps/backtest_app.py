@@ -108,18 +108,18 @@ def init(C):
     
     g.data_provider = DataProvider(batch_size=500)
     g.trade_executor = TradeExecutor(mode='backtest', strategy_name='momentum_strategy')
-    g.strategy = MomentumStrategy(account=g.account_id, strategy_name='momentum_strategy')
+    g.trade_executor.set_context(C)
+    
+    g.strategy = MomentumStrategy(
+        account=g.account_id, 
+        strategy_name='momentum_strategy',
+        trade_executor=g.trade_executor
+    )
     
     g.stock_list = C.get_stock_list_in_sector(g.stock_pool_name)
     
     g.minute_data_cache = {}
     g.current_trading_date = None
-    g.day_state = {
-        'buy_count': 0,
-        'minute_counter': 0,
-        'last_signal_count': 0,
-        'open_prices': {}
-    }
     
 
 
@@ -171,13 +171,12 @@ def after_init(C):
 
 
 
-def start_new_trading_day(current_date, C):
+def start_new_trading_day(current_date):
     """
     交易日切换处理
     
     Args:
         current_date: 当前交易日（字符串格式，如'20240115'）
-        C: contextinfo对象
     """
     
     minute_data = g.data_provider.get_minute_data(
@@ -188,7 +187,7 @@ def start_new_trading_day(current_date, C):
     )
     
     if not minute_data or len(minute_data) == 0:
-        print(f"警告：日期 {current_date} 没有分钟线数据")
+        print(f"[WARN] 日期 {current_date} 没有分钟线数据")
         g.minute_data_cache[current_date] = pd.DataFrame()
     else:
         minute_data_multi = pd.concat(
@@ -196,35 +195,22 @@ def start_new_trading_day(current_date, C):
             names=['stock_code', 'timestamp']
         )
         g.minute_data_cache[current_date] = minute_data_multi
-        print(f"分钟数据加载成功，股票数: {len(minute_data)}, 转换为MultiIndex DataFrame")
     
     old_dates = sorted([d for d in g.minute_data_cache.keys() if d != current_date])
     if len(old_dates) > 3:
         for old_date in old_dates[:-3]:
             del g.minute_data_cache[old_date]
-            print(f"清理旧缓存: {old_date}")
     
-    current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-    current_cash = g.trade_executor.get_cash(g.account_id, C)
-    print(f"开盘持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
-    
-    open_prices = {}
-    for stock_code in g.stock_list:
-        if current_date in g.strategy.open_df.index and stock_code in g.strategy.open_df.columns:
-            price = g.strategy.open_df.loc[current_date, stock_code]
-            if not pd.isna(price) and price > 0:
-                open_prices[stock_code] = price
-    
-    g.day_state = {
-        'buy_count': 0,
-        'minute_counter': 0,
-        'last_signal_count': 0,
-        'open_prices': open_prices
-    }
+    current_holdings = g.trade_executor.get_holdings(g.account_id)
+    current_cash = g.trade_executor.get_cash(g.account_id)
+    print(f"\n[{current_date}] 开盘持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
     
     g.strategy.init_minute_cache(current_date, g.stock_list)
-    
-    print(f"交易日 {current_date} 初始化完成\n")
+
+
+def _extract_open_prices(minute_data):
+    """提取当前分钟开盘价（唯一可用的实时价格）"""
+    return {stock: data['open'] for stock, data in minute_data.items()}
 
 
 def handlebar(C):
@@ -244,10 +230,8 @@ def handlebar(C):
         return
     
     if g.current_trading_date is None or current_date != g.current_trading_date:
-        start_new_trading_day(current_date, C)
+        start_new_trading_day(current_date)
         g.current_trading_date = current_date
-    
-    g.day_state['minute_counter'] += 1
     
     g.strategy.sync_metadata_with_holdings()
     
@@ -296,197 +280,16 @@ def handlebar(C):
         minute_data=prev_minute_data
     )
     
+    # 买入和卖出时，仅传入当前分钟的开盘价，防止前视现象
+    minute_open_prices = _extract_open_prices(current_minute_data)
 
-    minute_prices = {stock: data['close'] for stock, data in current_minute_data.items()}
-    minute_opens = {stock: data['open'] for stock, data in current_minute_data.items()}
-    minute_highs = {stock: data['high'] for stock, data in current_minute_data.items()}
-    minute_lows = {stock: data['low'] for stock, data in current_minute_data.items()}
-    minute_volumes = {stock: data['volume'] for stock, data in current_minute_data.items()}
-    minute_amounts = {stock: data['amount'] for stock, data in current_minute_data.items()}
+    # 处理卖出
+    if minute_open_prices:
+        g.strategy.process_sell_orders(minute_open_prices, current_timestamp_dt)
     
-    current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-    
-    if len(current_holdings) > 0 and minute_prices:
-        exit_dict = g.strategy.generate_sell_signals(minute_prices, current_date, holdings_dict=current_holdings)
-        
-        if exit_dict:
-            print(f"\n[{current_time}] 卖出信号: {len(exit_dict)} 只股票")
-            
-            print(f"[DEBUG] 卖出前持仓数: {len(current_holdings)}")
-            for code, h in list(current_holdings.items())[:5]:
-                print(f"[DEBUG]   {code}: 总数量={h.get('volume', 0)}, 可用={h.get('available', 0)}")
-            
-            for stock_code, reason in exit_dict.items():
-                if stock_code in current_holdings:
-                    holding = current_holdings[stock_code]
-                    total_volume = holding['volume']
-                    available_volume = holding.get('available', 0)
-                    current_price = minute_prices.get(stock_code, 0)
-                    
-                    if available_volume <= 0:
-                        print(f"[DEBUG] {stock_code} 可用数量为0 (总持仓={total_volume}, 可用={available_volume}), 跳过卖出 (T+1限制)")
-                        continue
-                    
-                    if current_price > 0:
-                        sell_price = current_price
-                        
-                        print(f"  [{current_time}] 卖出 {stock_code}: 价格={sell_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
-                        
-                        order_id = g.trade_executor.sell(
-                            g.account_id, stock_code, sell_price, available_volume,
-                            'momentum_strategy', f'sell_{reason}', C
-                        )
-                        print(f"[DEBUG] 卖出下单返回 order_id: {order_id}")
-                        
-                        holdings_after_sell = g.trade_executor.get_holdings(g.account_id, C)
-                        print(f"[DEBUG] 卖出 {stock_code} 后立即查询持仓数: {len(holdings_after_sell)}")
-                        print(f"[DEBUG] {stock_code} 是否还在持仓中: {stock_code in holdings_after_sell}")
-                        if stock_code in holdings_after_sell:
-                            print(f"[DEBUG] {stock_code} 剩余数量: {holdings_after_sell[stock_code].get('volume', 0)}, 可用: {holdings_after_sell[stock_code].get('available', 0)}")
-                        
-                        g.strategy.on_sell(stock_code)
-                    else:
-                        print(f"[DEBUG] {stock_code} 无当前价格数据,跳过卖出 (current_price={current_price})")
-                else:
-                    print(f"[DEBUG] {stock_code} 不在回测引擎持仓中,跳过卖出")
-            
-            current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-            current_cash = g.trade_executor.get_cash(g.account_id, C)
-            print(f"  [{current_time}] 卖出后持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
-    
-    buy_scores = g.strategy.generate_buy_signals_minute(current_date)
-    
-    if g.day_state['minute_counter'] <= 3 or len(buy_scores) != g.day_state['last_signal_count']:
-        if len(buy_scores) > 0:
-            print(f"[{current_time}] 买入信号: {len(buy_scores)} 只股票 (排名前5: {list(buy_scores.head().index)})")
-        g.day_state['last_signal_count'] = len(buy_scores)
-    
-    if len(buy_scores) == 0:
-        return
-    
-    # 时间过滤：10:00之前不交易
-    current_hour = int(current_time.split(':')[0])
-    current_minute = int(current_time.split(':')[1])
-    current_time_value = current_hour * 60 + current_minute
-    if current_time_value < 10 * 60:  # 10:00 = 600分钟
-        if g.day_state['minute_counter'] <= 3:
-            print(f"[{current_time}] 10:00之前不交易，跳过买入")
-        return
-    
-    current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-    current_cash = g.trade_executor.get_cash(g.account_id, C)
-    
-    existing_codes = set(current_holdings.keys())
-    
-    if current_cash < 10000:
-        return
-    
-    open_prices = g.day_state.get('open_prices', {})
-    
-    holding_market_value = sum(
-        h['volume'] * open_prices.get(s, 0)
-        for s, h in current_holdings.items()
-    )
-    
-    for stock_code in buy_scores.index:
-        if stock_code in existing_codes:
-            continue
-        
-        if current_cash < 10000:
-            break
-        
-        # 使用当前分钟开盘价作为买入价格（实盘中可立即成交）
-        open_price = minute_opens.get(stock_code, 0)
-        if open_price <= 0:
-            continue
-        
-        buy_price = open_price
-        
-        total_capital = current_cash + holding_market_value
-        
-        buy_amount, score = g.strategy.calc_buy_amount(
-            stock_code, total_capital
-        )
-        
-        if buy_amount > current_cash * 0.95:
-            buy_amount = current_cash * 0.95
-        
-        if buy_amount < 10000:
-            continue
-        
-        volume = int(buy_amount / buy_price / 100) * 100
-        
-        if volume >= 100:
-            print(f"  [{current_time}] 买入 {stock_code}: 开盘价={buy_price:.2f}, 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
-            
-            print(f"[DEBUG] 买入前持仓数: {len(current_holdings)}, {stock_code} 在持仓中: {stock_code in current_holdings}")
-            if stock_code in current_holdings:
-                print(f"[DEBUG]   已有 {stock_code} 数量: {current_holdings[stock_code].get('volume', 0)}")
-            
-            print("=" * 60)
-            print(f"[买入前调试信息] {stock_code}")
-            print("-" * 60)
-            print(f"[股票信息]")
-            print(f"  代码: {stock_code}")
-            print(f"  买入价(开盘): {buy_price:.2f}")
-            print(f"  数量: {volume}")
-            print(f"  评分: {score:.2f}")
-            print(f"  信号评分: {buy_scores[stock_code]:.2f}")
-            
-            print(f"[当前分钟K线] {current_time}")
-            minute_open = minute_opens.get(stock_code, 0)
-            minute_high = minute_highs.get(stock_code, 0)
-            minute_low = minute_lows.get(stock_code, 0)
-            minute_close = minute_prices.get(stock_code, 0)
-            minute_vol = minute_volumes.get(stock_code, 0)
-            minute_amt = minute_amounts.get(stock_code, 0)
-            print(f"  开盘: {minute_open:.2f}")
-            print(f"  最高: {minute_high:.2f}")
-            print(f"  最低: {minute_low:.2f}")
-            print(f"  收盘: {minute_close:.2f}")
-            print(f"  成交量: {minute_vol:,.0f}")
-            print(f"  成交额: {minute_amt:,.2f}")
-            if minute_vol > 0:
-                print(f"  振幅: {((minute_high - minute_low) / minute_open * 100):.2f}%")
-            
-            print(f"[账户信息]")
-            print(f"  可用资金: {current_cash:.2f}")
-            print(f"  总资产: {total_capital:.2f}")
-            print(f"  持仓市值: {holding_market_value:.2f}")
-            print(f"  资金使用率: {(holding_market_value/total_capital*100 if total_capital > 0 else 0):.2f}%")
-            
-            print(f"[持仓元数据]")
-            all_metadata = g.strategy.metadata_mgr.get_all_metadata()
-            if all_metadata:
-                for code, meta in all_metadata.items():
-                    print(f"  {code}: 买入日期={meta.get('buy_date')}, 评分={meta.get('score')}, 目标收益={meta.get('target_profit', 0)*100:.2f}%")
-            else:
-                print("  当前无持仓元数据")
-            
-            print(f"[当前持仓]")
-            if current_holdings:
-                for code, pos in current_holdings.items():
-                    print(f"  {code}: 数量={pos.get('volume', 0)}, 成本={pos.get('cost', 0):.2f}, 可用={pos.get('available', 0)}")
-            else:
-                print("  当前无持仓")
-            print("=" * 60)
-            
-            order_id = g.trade_executor.buy(
-                g.account_id, stock_code, buy_price, volume,
-                'momentum_strategy', f'buy_score_{score}', C
-            )
-            
-            g.strategy.on_buy(stock_code, current_date, score, buy_time=current_timestamp_dt)
-            
-            current_holdings = g.trade_executor.get_holdings(g.account_id, C)
-            current_cash = g.trade_executor.get_cash(g.account_id, C)
-            existing_codes = set(current_holdings.keys())
-            holding_market_value = sum(
-                h['volume'] * open_prices.get(s, 0)
-                for s, h in current_holdings.items()
-            )
-            
-            g.day_state['buy_count'] += 1
+    # 处理买入
+    if minute_open_prices:
+        g.strategy.process_buy_orders(minute_open_prices, current_timestamp_dt)
 
 
 

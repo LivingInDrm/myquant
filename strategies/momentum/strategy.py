@@ -19,7 +19,11 @@ from config.strategy_config import (
 class MomentumStrategy:
     """短期强势股策略"""
     
-    def __init__(self, account=None, strategy_name=''):
+    def __init__(self, account=None, strategy_name='', trade_executor=None):
+        self.account = account
+        self.strategy_name = strategy_name
+        self.trade_executor = trade_executor
+        
         self.factor_calc = FactorCalculator()
         self.metadata_mgr = PositionMetadata()
         self.position_wrapper = PositionDataWrapper(account, strategy_name) if account else None
@@ -355,6 +359,141 @@ class MomentumStrategy:
                     exit_dict[stock_code] = reason
         
         return exit_dict
+    
+    def process_sell_orders(self, open_prices, current_datetime):
+        """
+        处理卖出信号并执行交易
+        
+        Args:
+            open_prices: {股票代码: 开盘价}
+            current_datetime: 当前时间（datetime对象）
+        
+        Returns:
+            dict: 卖出后的持仓字典
+        """
+        if self.trade_executor is None:
+            raise ValueError("未设置trade_executor，请先调用set_trade_executor()")
+        
+        holdings = self.trade_executor.get_holdings(self.account)
+        
+        if not holdings or not open_prices:
+            return holdings
+        
+        current_date = current_datetime.strftime('%Y%m%d')
+        current_time_str = current_datetime.strftime('%H:%M')
+        
+        exit_dict = self.generate_sell_signals(open_prices, current_date, holdings_dict=holdings)
+        
+        if not exit_dict:
+            return holdings
+        
+        print(f"\n[{current_time_str}] 卖出信号: {len(exit_dict)} 只股票")
+        
+        for stock_code, reason in exit_dict.items():
+            if stock_code not in holdings:
+                continue
+            
+            holding = holdings[stock_code]
+            available_volume = holding.get('available', 0)
+            
+            if available_volume <= 0:
+                continue
+            
+            open_price = open_prices.get(stock_code, 0)
+            if open_price <= 0:
+                continue
+            
+            total_volume = holding['volume']
+            print(f"  [{current_time_str}] 卖出 {stock_code}: 开盘价={open_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
+            
+            self.trade_executor.sell(
+                self.account, stock_code, open_price, available_volume,
+                self.strategy_name, f'sell_{reason}'
+            )
+            
+            self.on_sell(stock_code)
+        
+        holdings = self.trade_executor.get_holdings(self.account)
+        cash = self.trade_executor.get_cash(self.account)
+        print(f"  [{current_time_str}] 卖出后持仓数: {len(holdings)}, 可用资金: {cash:.2f}")
+        
+        return holdings
+    
+    def process_buy_orders(self, open_prices, current_datetime):
+        """
+        处理买入信号并执行交易
+        
+        Args:
+            open_prices: {股票代码: 当前分钟开盘价}
+            current_datetime: 当前时间（datetime对象）
+        
+        Returns:
+            int: 买入股票数量
+        """
+        if self.trade_executor is None:
+            raise ValueError("未设置trade_executor，请先调用set_trade_executor()")
+        
+        current_hour = current_datetime.hour
+        current_minute = current_datetime.minute
+        current_time_value = current_hour * 60 + current_minute
+        if current_time_value < 10 * 60:
+            return 0
+        
+        current_cash = self.trade_executor.get_cash(self.account)
+        
+        if current_cash < 10000:
+            return 0
+        
+        current_date = current_datetime.strftime('%Y%m%d')
+        buy_scores = self.generate_buy_signals_minute(current_date)
+        
+        if len(buy_scores) == 0:
+            return 0
+        
+        current_holdings = self.trade_executor.get_holdings(self.account)
+        existing_codes = set(current_holdings.keys())
+        
+        total_capital = self.trade_executor.get_total_asset(self.account)
+        
+        buy_count = 0
+        
+        for stock_code in buy_scores.index:
+            if stock_code in existing_codes:
+                continue
+            
+            if current_cash < 10000:
+                break
+            
+            open_price = open_prices.get(stock_code, 0)
+            if open_price <= 0:
+                continue
+            
+            buy_amount, score = self.calc_buy_amount(stock_code, total_capital)
+            
+            if buy_amount > current_cash * 0.95:
+                buy_amount = current_cash * 0.95
+            
+            if buy_amount < 10000:
+                continue
+            
+            volume = int(buy_amount / open_price / 100) * 100
+            
+            if volume >= 100:
+                self.trade_executor.buy(
+                    self.account, stock_code, open_price, volume,
+                    self.strategy_name, f'buy_score_{score}'
+                )
+                
+                self.on_buy(stock_code, current_date, score, buy_time=current_datetime)
+                
+                current_cash = self.trade_executor.get_cash(self.account)
+                current_holdings = self.trade_executor.get_holdings(self.account)
+                existing_codes = set(current_holdings.keys())
+                total_capital = self.trade_executor.get_total_asset(self.account)
+                
+                buy_count += 1
+        
+        return buy_count
     
     def calc_buy_amount(self, stock_code, total_capital):
         """

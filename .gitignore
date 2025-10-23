@@ -50,6 +50,10 @@ logs/
 backtest_log_*.txt
 debug_*.log
 
+# Backtest results
+result/
+results/
+
 # Data files (if they are large)
 data/*.csv
 data/*.xlsx
