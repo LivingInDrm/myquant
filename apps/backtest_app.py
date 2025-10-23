@@ -29,17 +29,62 @@ if not hasattr(sys, '_backtest_stdout_replaced'):
 
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from xtquant import xtdata
 
 from data.data_provider import DataProvider
 from core.trade_executor import TradeExecutor
 from strategies.momentum.strategy import MomentumStrategy
 from utils.helpers import get_df_ex, filter_opendate, timetag_to_datetime
-from config.strategy_config import MAX_POSITIONS, STOCK_POOL
+from config.strategy_config import STOCK_POOL
 from config.backtest_config import load_backtest_config
 
 BACKTEST_CONFIG = load_backtest_config()
+
+
+def save_backtest_results(backtest_index, group_result, start_time, end_time):
+    """
+    保存回测结果到文件
+    
+    Args:
+        backtest_index: 回测指标（Series或DataFrame）
+        group_result: 分组结果字典，包含order、deal、position等
+        start_time: 回测开始时间（格式：'YYYYMMDD'或'YYYY-MM-DD'）
+        end_time: 回测结束时间（格式：'YYYYMMDD'或'YYYY-MM-DD'）
+    """
+    result_dir = os.path.join(project_root, 'result')
+    os.makedirs(result_dir, exist_ok=True)
+    
+    timestamp = dt_now.now().strftime('%Y%m%d_%H%M%S')
+    start_clean = start_time.replace('-', '')
+    end_clean = end_time.replace('-', '')
+    
+    run_dir = os.path.join(result_dir, f'backtest_{start_clean}_{end_clean}_{timestamp}')
+    os.makedirs(run_dir, exist_ok=True)
+    
+    if backtest_index is not None:
+        if isinstance(backtest_index, pd.DataFrame):
+            if not backtest_index.empty and 'time' in backtest_index.columns:
+                backtest_index = backtest_index[
+                    (backtest_index['time'] >= start_clean) & 
+                    (backtest_index['time'] <= end_clean)
+                ]
+        
+        index_file = os.path.join(run_dir, 'backtest_index.csv')
+        if isinstance(backtest_index, pd.Series):
+            backtest_index.to_csv(index_file, encoding='utf-8-sig')
+        else:
+            backtest_index.to_csv(index_file, index=False, encoding='utf-8-sig')
+        print(f"[OK] 回测指标已保存: {index_file}")
+    
+    if group_result:
+        for key, df in group_result.items():
+            if df is not None and not df.empty:
+                group_file = os.path.join(run_dir, f'{key}.csv')
+                df.to_csv(group_file, index=False, encoding='utf-8-sig')
+                print(f"[OK] {key} 数据已保存: {group_file}")
+    
+    print(f"[OK] 所有结果已保存到目录: {run_dir}")
 
 
 class G:
@@ -52,14 +97,11 @@ g = G()
 
 def init(C):
     """
-    初始化函数
+    初始化函数，在回测启动前调用一次
     
     Args:
         C: contextinfo对象
     """
-    print("=" * 60)
-    print("初始化短期强势股量化交易系统")
-    print("=" * 60)
     
     g.stock_pool_name = STOCK_POOL
     g.account_id = 'test'
@@ -69,9 +111,6 @@ def init(C):
     g.strategy = MomentumStrategy(account=g.account_id, strategy_name='momentum_strategy')
     
     g.stock_list = C.get_stock_list_in_sector(g.stock_pool_name)
-    print(f"股票池: {g.stock_pool_name}, 股票数量: {len(g.stock_list)}")
-    
-    g.max_buy_count = MAX_POSITIONS
     
     g.minute_data_cache = {}
     g.current_trading_date = None
@@ -82,10 +121,6 @@ def init(C):
         'open_prices': {}
     }
     
-    print(f"[DEBUG] 账户ID: {g.account_id}")
-    print(f"[DEBUG] 回测配置: {BACKTEST_CONFIG}")
-    
-    print("初始化完成")
 
 
 def after_init(C):
@@ -94,21 +129,13 @@ def after_init(C):
     
     Args:
         C: contextinfo对象
-    """
-    print("=" * 60)
-    print("开始预处理数据和计算因子")
-    print("=" * 60)
-    
+    """  
     start_time = BACKTEST_CONFIG['start_time'].replace('-', '')
     end_time = BACKTEST_CONFIG['end_time'].replace('-', '')
     
     warmup_days = 365
     data_start_time = pd.to_datetime(start_time) - pd.Timedelta(days=warmup_days)
     data_start_time_str = data_start_time.strftime('%Y%m%d')
-    
-    print(f"回测执行范围: {start_time} ~ {end_time}")
-    print(f"数据获取范围: {data_start_time_str} ~ {end_time} (包含{warmup_days}天热身期)")
-    print(f"正在获取 {len(g.stock_list)} 只股票的历史数据...")
     
     g.backtest_start = start_time
     g.backtest_end = end_time
@@ -125,17 +152,14 @@ def after_init(C):
         print("错误：无法获取历史数据")
         return
     
-    print("转换数据格式...")
+
     close_df = get_df_ex(data, 'close')
     open_df = get_df_ex(data, 'open')
     high_df = get_df_ex(data, 'high')
     volume_df = get_df_ex(data, 'volume')
     amount_df = get_df_ex(data, 'amount')
     
-    print(f"数据时间范围: {close_df.index[0]} ~ {close_df.index[-1]}")
-    print(f"数据维度: {close_df.shape}")
-    
-    print("计算上市日期过滤...")
+
     listing_filter_df = filter_opendate(g.stock_list, close_df, 120, 'xtdata')
     
     g.strategy.prepare_daily_factors(
@@ -144,9 +168,7 @@ def after_init(C):
         listing_filter_df=listing_filter_df
     )
     
-    print("=" * 60)
-    print("数据预处理完成，开始回测")
-    print("=" * 60)
+
 
 
 def start_new_trading_day(current_date, C):
@@ -157,11 +179,7 @@ def start_new_trading_day(current_date, C):
         current_date: 当前交易日（字符串格式，如'20240115'）
         C: contextinfo对象
     """
-    print(f"\n{'=' * 60}")
-    print(f"新交易日: {current_date}")
-    print(f"{'=' * 60}")
     
-    print(f"加载当日分钟数据...")
     minute_data = g.data_provider.get_minute_data(
         stock_list=g.stock_list,
         date=current_date,
@@ -171,10 +189,14 @@ def start_new_trading_day(current_date, C):
     
     if not minute_data or len(minute_data) == 0:
         print(f"警告：日期 {current_date} 没有分钟线数据")
-        g.minute_data_cache[current_date] = {}
+        g.minute_data_cache[current_date] = pd.DataFrame()
     else:
-        g.minute_data_cache[current_date] = minute_data
-        print(f"分钟数据加载成功，股票数: {len(minute_data)}")
+        minute_data_multi = pd.concat(
+            minute_data,
+            names=['stock_code', 'timestamp']
+        )
+        g.minute_data_cache[current_date] = minute_data_multi
+        print(f"分钟数据加载成功，股票数: {len(minute_data)}, 转换为MultiIndex DataFrame")
     
     old_dates = sorted([d for d in g.minute_data_cache.keys() if d != current_date])
     if len(old_dates) > 3:
@@ -229,49 +251,58 @@ def handlebar(C):
     
     g.strategy.sync_metadata_with_holdings()
     
-    if current_date not in g.minute_data_cache or not g.minute_data_cache[current_date]:
+    # 获取分钟K线数据
+    if current_date not in g.minute_data_cache:
         return
     
-    minute_data = g.minute_data_cache[current_date]
+    minute_data_multi = g.minute_data_cache[current_date]
     
-    minute_prices = {}
-    minute_volumes = {}
-    minute_amounts = {}
-    minute_opens = {}
-    minute_highs = {}
-    minute_lows = {}
-    
-    matched_count = 0
-    unmatched_samples = []
-    
-    for stock_code, df in minute_data.items():
-        if df.empty:
-            continue
-        
-        if current_timestamp_str in df.index:
-            minute_prices[stock_code] = df.loc[current_timestamp_str, 'close']
-            minute_volumes[stock_code] = df.loc[current_timestamp_str, 'volume']
-            minute_amounts[stock_code] = df.loc[current_timestamp_str, 'amount']
-            minute_opens[stock_code] = df.loc[current_timestamp_str, 'open']
-            minute_highs[stock_code] = df.loc[current_timestamp_str, 'high']
-            minute_lows[stock_code] = df.loc[current_timestamp_str, 'low']
-            matched_count += 1
-        else:
-            if len(unmatched_samples) < 3:
-                unmatched_samples.append((stock_code, df.index[0] if len(df.index) > 0 else None))
-    
-    if not minute_prices:
+    if minute_data_multi.empty:
         return
     
     current_timestamp_dt = datetime.strptime(current_timestamp_str, '%Y%m%d%H%M%S')
     
+    # 计算上一分钟的时间戳（用于因子计算，避免前视偏差）
+    prev_timestamp_dt = current_timestamp_dt - timedelta(minutes=1)
+    prev_timestamp_str = prev_timestamp_dt.strftime('%Y%m%d%H%M%S')
+    
+    # 获取上一分钟K线数据（用于因子计算）
+    # 如果上一分钟没有数据（9:30开盘或13:00午盘），会在KeyError处理中return
+    try:
+        prev_minute_data = minute_data_multi.xs(
+            prev_timestamp_str,
+            level='timestamp'
+        ).to_dict('index')
+    except KeyError:
+        # 上一分钟没有数据：9:30(上一分钟9:29)或13:00(上一分钟12:59)
+        return
+    
+    if not prev_minute_data:
+        return
+    
+    # 获取当前分钟K线数据（用于买入价格）
+    try:
+        current_minute_data = minute_data_multi.xs(
+            current_timestamp_str,
+            level='timestamp'
+        ).to_dict('index')
+    except KeyError:
+        current_minute_data = {}
+    
+    # 更新分钟级因子（使用上一分钟的完整数据）
     g.strategy.update_minute_factors(
         date=current_date,
-        minute_timestamp=current_timestamp_dt,
-        minute_prices=minute_prices,
-        minute_volumes=minute_volumes,
-        minute_amounts=minute_amounts
+        minute_timestamp=prev_timestamp_dt,
+        minute_data=prev_minute_data
     )
+    
+
+    minute_prices = {stock: data['close'] for stock, data in current_minute_data.items()}
+    minute_opens = {stock: data['open'] for stock, data in current_minute_data.items()}
+    minute_highs = {stock: data['high'] for stock, data in current_minute_data.items()}
+    minute_lows = {stock: data['low'] for stock, data in current_minute_data.items()}
+    minute_volumes = {stock: data['volume'] for stock, data in current_minute_data.items()}
+    minute_amounts = {stock: data['amount'] for stock, data in current_minute_data.items()}
     
     current_holdings = g.trade_executor.get_holdings(g.account_id, C)
     
@@ -345,10 +376,9 @@ def handlebar(C):
     current_holdings = g.trade_executor.get_holdings(g.account_id, C)
     current_cash = g.trade_executor.get_cash(g.account_id, C)
     
-    available_slots = g.max_buy_count - len(current_holdings)
     existing_codes = set(current_holdings.keys())
     
-    if available_slots <= 0 or current_cash < 10000:
+    if current_cash < 10000:
         return
     
     open_prices = g.day_state.get('open_prices', {})
@@ -362,19 +392,20 @@ def handlebar(C):
         if stock_code in existing_codes:
             continue
         
-        if available_slots <= 0 or current_cash < 10000:
+        if current_cash < 10000:
             break
         
-        market_price = minute_prices.get(stock_code, 0)
-        if market_price <= 0:
+        # 使用当前分钟开盘价作为买入价格（实盘中可立即成交）
+        open_price = minute_opens.get(stock_code, 0)
+        if open_price <= 0:
             continue
         
-        buy_price = market_price
+        buy_price = open_price
         
         total_capital = current_cash + holding_market_value
         
         buy_amount, score = g.strategy.calc_buy_amount(
-            stock_code, total_capital, current_date
+            stock_code, total_capital
         )
         
         if buy_amount > current_cash * 0.95:
@@ -386,7 +417,7 @@ def handlebar(C):
         volume = int(buy_amount / buy_price / 100) * 100
         
         if volume >= 100:
-            print(f"  [{current_time}] 买入 {stock_code}: 市价={market_price:.2f}, 挂单价={buy_price:.2f}, 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
+            print(f"  [{current_time}] 买入 {stock_code}: 开盘价={buy_price:.2f}, 数量={volume}, 得分={buy_scores[stock_code]:.1f}")
             
             print(f"[DEBUG] 买入前持仓数: {len(current_holdings)}, {stock_code} 在持仓中: {stock_code in current_holdings}")
             if stock_code in current_holdings:
@@ -397,8 +428,7 @@ def handlebar(C):
             print("-" * 60)
             print(f"[股票信息]")
             print(f"  代码: {stock_code}")
-            print(f"  市价(收盘): {market_price:.2f}")
-            print(f"  买入价: {buy_price:.2f}")
+            print(f"  买入价(开盘): {buy_price:.2f}")
             print(f"  数量: {volume}")
             print(f"  评分: {score:.2f}")
             print(f"  信号评分: {buy_scores[stock_code]:.2f}")
@@ -450,7 +480,6 @@ def handlebar(C):
             
             current_holdings = g.trade_executor.get_holdings(g.account_id, C)
             current_cash = g.trade_executor.get_cash(g.account_id, C)
-            available_slots = g.max_buy_count - len(current_holdings)
             existing_codes = set(current_holdings.keys())
             holding_market_value = sum(
                 h['volume'] * open_prices.get(s, 0)
@@ -495,5 +524,15 @@ if __name__ == '__main__':
             print(f"成交总数: {len(group_result['deal'])}")
         if 'position' in group_result:
             print(f"持仓记录数: {len(group_result['position'])}")
+        
+        print("\n" + "=" * 60)
+        print("保存回测结果")
+        print("=" * 60)
+        save_backtest_results(
+            backtest_index,
+            group_result,
+            BACKTEST_CONFIG['start_time'],
+            BACKTEST_CONFIG['end_time']
+        )
     
     print("\n回测完成")

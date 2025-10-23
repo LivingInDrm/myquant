@@ -92,10 +92,12 @@ def rank_filter(df: pd.DataFrame, N: int, axis=1, ascending=False,
     return _df <= N
 
 
+_OPENDATE_CACHE = {}
+
 def filter_opendate(stock_list: list, df: pd.DataFrame, n: int, 
                    data_source='xtdata') -> pd.DataFrame:
     """
-    判断股票上市天数是否大于N天
+    判断股票上市天数是否大于N天（向量化优化版本，带缓存）
     
     Args:
         stock_list: 股票代码列表
@@ -106,16 +108,26 @@ def filter_opendate(stock_list: list, df: pd.DataFrame, n: int,
     Returns:
         pd.DataFrame: 布尔值DataFrame，True表示上市天数>=n
     """
-    result_df = pd.DataFrame(index=df.index, columns=df.columns, dtype=bool)
-    result_df[:] = False
+    result_df = pd.DataFrame(False, index=df.index, columns=df.columns, dtype=bool)
     
     if data_source == 'xtdata':
-        stock_opendate = {
-            stock: xtdata.get_instrument_detail(stock).get("OpenDate", "19700101")
-            for stock in stock_list
-        }
+        stock_opendate = {}
+        for stock in stock_list:
+            if stock in _OPENDATE_CACHE:
+                stock_opendate[stock] = _OPENDATE_CACHE[stock]
+            else:
+                try:
+                    detail = xtdata.get_instrument_detail(stock)
+                    opendate = detail.get("OpenDate", "19700101") if detail else "19700101"
+                    stock_opendate[stock] = opendate
+                    _OPENDATE_CACHE[stock] = opendate
+                except Exception:
+                    stock_opendate[stock] = "19700101"
+                    _OPENDATE_CACHE[stock] = "19700101"
     else:
         raise ValueError("Unsupported data_source")
+    
+    df_dates = pd.to_datetime(df.index)
     
     for stock, opendate_str in stock_opendate.items():
         if not opendate_str or opendate_str == "19700101":
@@ -123,13 +135,8 @@ def filter_opendate(stock_list: list, df: pd.DataFrame, n: int,
         
         try:
             open_date = pd.to_datetime(opendate_str)
-            
-            for date in df.index:
-                current_date = pd.to_datetime(date)
-                days_since_open = (current_date - open_date).days
-                
-                if days_since_open >= n:
-                    result_df.at[date, stock] = True
+            days_since_open = (df_dates - open_date).days
+            result_df[stock] = days_since_open >= n
         except (ValueError, TypeError):
             continue
     

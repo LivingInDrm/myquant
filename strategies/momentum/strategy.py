@@ -10,7 +10,7 @@ from utils.helpers import (
     calc_daily_avg_volume_per_minute
 )
 from config.strategy_config import (
-    BUY_CONDITION_1, BUY_CONDITION_2, MIN_LISTING_DAYS, MAX_POSITIONS,
+    BUY_CONDITION_1, BUY_CONDITION_2, MIN_LISTING_DAYS,
     DAILY_AVG_VOLUME_WINDOW_5D, DAILY_AVG_VOLUME_WINDOW_10D,
     STOP_LOSS, MAX_HOLD_DAYS
 )
@@ -24,28 +24,26 @@ class MomentumStrategy:
         self.metadata_mgr = PositionMetadata()
         self.position_wrapper = PositionDataWrapper(account, strategy_name) if account else None
         
-        self.close_df = None
+        # 日频因子（用于分钟级评分的基础数据）
         self.open_df = None
-        self.high_df = None
-        self.volume_df = None
-        self.amount_df = None
-        
         self.ma_dict = None
         self.rolling_max_dict = None
-        self.score_df = None
         self.buy_cond1_df = None
-        self.buy_cond2_df = None
         
+        # 成交量相关
         self.daily_avg_vol_per_min_5d = None
-        self.daily_avg_vol_per_min_10d = None
+        self.daily_avg_volume_10d = None
         
+        # 分钟级因子
         self.minute_cache = {}
         self.minute_scores = {}
         self.minute_buy_cond2 = {}
         
+        # 过滤器
         self.his_st_dict = {}
         self.listing_filter_df = None
         
+        # 交易日期索引
         self.trading_dates = []
         self.trading_date_to_idx = {}
     
@@ -63,26 +61,22 @@ class MomentumStrategy:
             stock_list: 股票列表（用于上市日期过滤）
             listing_filter_df: 上市日期过滤DataFrame（可选）
         """
-        self.close_df = close_df.shift(1)
+        # 保留开盘价用于持仓市值估算
         self.open_df = open_df
-        self.high_df = high_df.shift(1)
-        self.volume_df = volume_df.shift(1)
-        self.amount_df = amount_df.shift(1)
         
+        # 计算均线（用于分钟级评分）
         self.ma_dict = self.factor_calc.calc_ma(close_df, [5, 10, 20, 30, 60, 120])
         for period in self.ma_dict:
             self.ma_dict[period] = self.ma_dict[period].shift(1)
         
+        # 计算滚动最高价（用于分钟级评分）
         self.rolling_max_dict = self.factor_calc.calc_rolling_max(
             high_df, [20, 40, 60, 80, 100]
         )
         for period in self.rolling_max_dict:
             self.rolling_max_dict[period] = self.rolling_max_dict[period].shift(1)
         
-        self.score_df = self.factor_calc.calc_uptrend_score(
-            self.close_df, self.high_df, self.volume_df, self.ma_dict
-        )
-        
+        # 计算买入条件1（日频）
         self.buy_cond1_df = self.factor_calc.calc_buy_condition_1(
             close_df,
             consecutive_days=BUY_CONDITION_1['consecutive_up_days'],
@@ -90,27 +84,21 @@ class MomentumStrategy:
             or_pct_change=BUY_CONDITION_1['or_pct_change']
         ).shift(1)
         
-        self.buy_cond2_df = self.factor_calc.calc_buy_condition_2_simple(
-            volume_df, amount_df,
-            volume_ratio_threshold=BUY_CONDITION_2['late_volume_ratio'],
-            amount_threshold=BUY_CONDITION_2['late_amount']
-        ).shift(1)
-        
+        # 计算5日平均每分钟成交量（用于分钟级量比计算）
         self.daily_avg_vol_per_min_5d = calc_daily_avg_volume_per_minute(
             volume_df, window=DAILY_AVG_VOLUME_WINDOW_5D
         ).shift(1)
         
-        self.daily_avg_vol_per_min_10d = calc_daily_avg_volume_per_minute(
-            volume_df, window=DAILY_AVG_VOLUME_WINDOW_10D
-        ).shift(1)
-        
+        # 计算10日平均日成交量（用于分钟级成交量放大判断）
         self.daily_avg_volume_10d = volume_df.rolling(
             window=DAILY_AVG_VOLUME_WINDOW_10D, min_periods=DAILY_AVG_VOLUME_WINDOW_10D
         ).mean().shift(1)
         
+        # 保存上市日期过滤器
         if listing_filter_df is not None:
             self.listing_filter_df = listing_filter_df
         
+        # 构建交易日期索引（用于计算持仓天数）
         self.trading_dates = [pd.to_datetime(d).strftime('%Y%m%d') for d in close_df.index]
         self.trading_date_to_idx = {date: idx for idx, date in enumerate(self.trading_dates)}
     
@@ -132,17 +120,14 @@ class MomentumStrategy:
                 'cum_amount': 0
             }
     
-    def update_minute_factors(self, date, minute_timestamp, minute_prices, 
-                             minute_volumes, minute_amounts):
+    def update_minute_factors(self, date, minute_timestamp, minute_data):
         """
         更新分钟级因子（每分钟调用）
         
         Args:
             date: 日期（字符串或datetime对象）
             minute_timestamp: 分钟时间戳（datetime）
-            minute_prices: 价格字典 {stock_code: price}
-            minute_volumes: 成交量字典 {stock_code: volume}
-            minute_amounts: 成交额字典 {stock_code: amount}
+            minute_data: 当前时刻的分钟K线数据字典 {stock_code: {open, high, low, close, volume, amount, ...}}
         """
         if isinstance(date, str):
             date = pd.to_datetime(date)
@@ -164,22 +149,24 @@ class MomentumStrategy:
         if minutes_since_open <= 0:
             return
         
-        for stock_code in minute_prices.keys():
+        for stock_code, stock_data in minute_data.items():
             if stock_code not in self.minute_cache:
                 continue
             
-            price = minute_prices.get(stock_code, np.nan)
-            volume = minute_volumes.get(stock_code, 0)
-            amount = minute_amounts.get(stock_code, 0)
+            price = stock_data.get('close', np.nan)
+            volume = stock_data.get('volume', 0)
+            amount = stock_data.get('amount', 0)
             
             if pd.isna(price) or price <= 0:
                 continue
             
-            cum_volume_prev = self.minute_cache[stock_code]['cum_volume']
-            cum_amount_prev = self.minute_cache[stock_code]['cum_amount']
-            
+            # 先累加当前分钟的成交量和成交额
             self.minute_cache[stock_code]['cum_volume'] += volume
             self.minute_cache[stock_code]['cum_amount'] += amount
+            
+            # 获取累加后的值（截止当前分钟结束的累计量）
+            cum_volume = self.minute_cache[stock_code]['cum_volume']
+            cum_amount = self.minute_cache[stock_code]['cum_amount']
             
             try:
                 if stock_code not in self.daily_avg_vol_per_min_5d.columns:
@@ -191,11 +178,11 @@ class MomentumStrategy:
                 continue
             
             volume_ratio = self.factor_calc.calc_intraday_volume_ratio(
-                cum_volume_prev, minutes_since_open, avg_vol_per_min_5d
+                cum_volume, minutes_since_open, avg_vol_per_min_5d
             )
             
             buy_cond2 = self.factor_calc.calc_buy_condition_2_intraday(
-                volume_ratio, cum_amount_prev, minutes_since_open
+                volume_ratio, cum_amount, minutes_since_open
             )
             self.minute_buy_cond2[stock_code] = buy_cond2
             
@@ -230,7 +217,7 @@ class MomentumStrategy:
                 avg_volume_10d = 1
             
             score = self.factor_calc.calc_minute_score(
-                price, cum_volume_prev, daily_ma, daily_rolling_max, avg_volume_10d
+                price, cum_volume, daily_ma, daily_rolling_max, avg_volume_10d
             )
             self.minute_scores[stock_code] = score
     
@@ -284,91 +271,6 @@ class MomentumStrategy:
         
         return result_scores.sort_values(ascending=False)
     
-    def prepare_factors(self, close_df, open_df, high_df, volume_df, amount_df, 
-                       stock_list=None, listing_filter_df=None):
-        """
-        向后兼容方法（调用 prepare_daily_factors）
-        
-        Args:
-            close_df: 收盘价DataFrame
-            open_df: 开盘价DataFrame
-            high_df: 最高价DataFrame
-            volume_df: 成交量DataFrame
-            amount_df: 成交金额DataFrame
-            stock_list: 股票列表（用于上市日期过滤）
-            listing_filter_df: 上市日期过滤DataFrame（可选）
-        """
-        return self.prepare_daily_factors(close_df, open_df, high_df, volume_df, 
-                                          amount_df, stock_list, listing_filter_df)
-    
-    def generate_buy_signals(self, date):
-        """
-        生成买入信号
-        
-        Args:
-            date: 日期
-            
-        Returns:
-            pd.Series: 股票得分Series (得分>=8的股票)
-        """
-        if date not in self.score_df.index:
-            print(f"[策略] 日期{date}不在数据范围内")
-            return pd.Series(dtype=float)
-        
-        cond1 = self.buy_cond1_df.loc[date]
-        cond2 = self.buy_cond2_df.loc[date]
-        scores = self.score_df.loc[date]
-        
-        print(f"[策略] cond1满足: {cond1.sum()} | cond2满足: {cond2.sum()} | scores>=8: {(scores>=8).sum()}")
-        
-        buy_signal = cond1 & cond2
-        print(f"[策略] cond1 & cond2: {buy_signal.sum()}")
-        
-        valid_stocks = buy_signal & (scores >= 8)
-        print(f"[策略] (cond1 & cond2) & scores>=8: {valid_stocks.sum()}")
-        
-        if valid_stocks.sum() > 0:
-            candidate_stocks = scores[valid_stocks].sort_values(ascending=False)
-            print(f"[策略] 候选股票(应用上市过滤前):")
-            for stock_code, score in candidate_stocks.head(10).items():
-                print(f"  {stock_code}: 得分={score:.1f}")
-        
-        if self.listing_filter_df is not None and date in self.listing_filter_df.index:
-            listing_filter = self.listing_filter_df.loc[date]
-            
-            filtered_out = valid_stocks & (~listing_filter)
-            if filtered_out.sum() > 0:
-                print(f"[策略] 被上市过滤拦截的股票({filtered_out.sum()}只):")
-                filtered_scores = scores[filtered_out].sort_values(ascending=False)
-                for stock_code, score in filtered_scores.head(10).items():
-                    print(f"  {stock_code}: 得分={score:.1f} (上市天数不足)")
-            
-            valid_stocks = valid_stocks & listing_filter
-            print(f"[策略] 应用上市过滤后: {valid_stocks.sum()}")
-        
-        result_scores = scores[valid_stocks]
-        
-        return result_scores.sort_values(ascending=False)
-    
-    def filter_buy_list(self, buy_scores, date, max_count=MAX_POSITIONS):
-        """
-        过滤买入列表
-        
-        Args:
-            buy_scores: 买入得分Series
-            date: 日期
-            max_count: 最大买入数量
-            
-        Returns:
-            list: 过滤后的股票列表
-        """
-        stock_list = buy_scores.index.tolist()
-        
-        stock_list = filter_st_stocks(stock_list, date, self.his_st_dict)
-        
-        stock_list = stock_list[:max_count]
-        
-        return stock_list
     
     def check_exit_conditions(self, stock_code, holding_dict, current_price, current_date):
         metadata = self.metadata_mgr.get_metadata(stock_code)
@@ -454,24 +356,25 @@ class MomentumStrategy:
         
         return exit_dict
     
-    def calc_buy_amount(self, stock_code, total_capital, date):
+    def calc_buy_amount(self, stock_code, total_capital):
         """
-        计算买入金额
+        计算买入金额（分钟级回测使用分钟级评分）
         
         Args:
             stock_code: 股票代码
             total_capital: 总资金
-            date: 日期
             
         Returns:
             tuple: (amount, score)
         """
-        if date not in self.score_df.index:
+        # 使用分钟级评分
+        score = self.minute_scores.get(stock_code, None)
+        
+        if score is None:
+            print(f"[WARNING] calc_buy_amount: {stock_code} 不在 minute_scores 中，跳过")
             return 0, 0
         
-        score = self.score_df.loc[date, stock_code]
-        
-        if pd.isna(score) or score < 8:
+        if score < 8:
             return 0, 0
         
         score = int(score)

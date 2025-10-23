@@ -150,53 +150,6 @@ def minute_backtest_example():
     print("=" * 60)
 
 
-def daily_backtest_compatibility():
-    """日线回测兼容性测试（向后兼容）"""
-    
-    print("\n" + "=" * 60)
-    print("日线回测兼容性测试")
-    print("=" * 60)
-    
-    strategy = MomentumStrategy()
-    data_loader = DataLoader()
-    
-    stock_list = ['600519.SH', '000858.SZ']
-    start_date = '20250901'
-    end_date = '20250907'
-    
-    daily_data = data_loader.load_daily_data(
-        stock_list=stock_list,
-        start_date=start_date,
-        end_date=end_date
-    )
-    
-    close_df = data_loader.convert_to_matrix_format(daily_data, 'close')
-    open_df = data_loader.convert_to_matrix_format(daily_data, 'open')
-    high_df = data_loader.convert_to_matrix_format(daily_data, 'high')
-    volume_df = data_loader.convert_to_matrix_format(daily_data, 'volume')
-    amount_df = data_loader.convert_to_matrix_format(daily_data, 'amount')
-    
-    strategy.prepare_factors(
-        close_df=close_df,
-        open_df=open_df,
-        high_df=high_df,
-        volume_df=volume_df,
-        amount_df=amount_df
-    )
-    
-    test_date = close_df.index[-1]
-    
-    buy_signals = strategy.generate_buy_signals(test_date)
-    
-    print(f"\n日期: {test_date}")
-    print(f"买入信号数量: {len(buy_signals)}")
-    if not buy_signals.empty:
-        print("\n买入信号:")
-        print(buy_signals)
-    
-    print("\n✓ 日线回测仍然正常工作（向后兼容）")
-
-
 if __name__ == '__main__':
     print("分钟级策略升级示例\n")
     

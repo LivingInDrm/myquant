@@ -44,7 +44,7 @@ start_time: '2025-09-01'
 
 # end_time: 回测结束时间
 #   - 格式: 'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS'
-end_time: '2025-09-02'
+end_time: '2025-09-06'
 
 # dividend_type: 除权方式
 #   - 'none': 不复权（真实价格）

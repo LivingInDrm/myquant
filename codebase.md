@@ -646,7 +646,6 @@ TARGET_PROFIT_MAP = {
 STOP_LOSS = -0.03            # 止损线（-3%）
 MAX_HOLD_DAYS = 3            # 最大持有天数
 MIN_LISTING_DAYS = 120       # 最小上市天数
-MAX_POSITIONS = 20           # 最大持仓数量
 ```
 
 #### 5.1.4 分钟级配置
