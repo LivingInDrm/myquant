@@ -1,23 +1,26 @@
 # coding: utf-8
 from core.position_data_wrapper import PositionDataWrapper
 from core.account_data_wrapper import AccountDataWrapper
+from utils.logger import get_logger
 
 
 class TradeExecutor:
     """交易执行层，封装下单、撤单逻辑"""
     
-    def __init__(self, mode='backtest', strategy_name=''):
+    def __init__(self, mode='backtest', strategy_name='', logger=None):
         """
         初始化
         
         Args:
             mode: 'backtest' 或 'realtime'
             strategy_name: 策略名称（回测模式需要）
+            logger: 日志对象
         """
         self.mode = mode
         self.strategy_name = strategy_name
         self.xt_trader = None
         self.context = None
+        self.logger = logger or get_logger('executor')
     
     def set_xt_trader(self, xt_trader):
         """
@@ -61,7 +64,7 @@ class TradeExecutor:
             try:
                 from xtquant.qmttools.functions import passorder
             except ImportError:
-                print(f"[BACKTEST] BUY {stock_code} at {price:.2f}, volume={volume}")
+                self.logger.info(f"BUY {stock_code} at {price:.2f}, volume={volume}")
                 return None
             
             # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
@@ -78,31 +81,31 @@ class TradeExecutor:
             except Exception as e:
                 up_stop = None
                 down_stop = None
-                print(f"[DEBUG] 获取 {stock_code} 涨跌停价失败: {e}")
+                self.logger.debug(f"获取 {stock_code} 涨跌停价失败: {e}")
             try:
                 is_susp = context.is_suspended_stock(stock_code, 1)
             except Exception as e:
                 is_susp = None
-                print(f"[DEBUG] 检查 {stock_code} 停牌状态失败: {e}")
+                self.logger.debug(f"检查 {stock_code} 停牌状态失败: {e}")
             try:
-                print(
-                    f"[DEBUG] BUY passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
+                self.logger.debug(
+                    f"BUY passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
                     f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
                 )
-                print(
-                    f"[DEBUG] BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
+                self.logger.debug(
+                    f"BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
                     f"slippage={getattr(context, 'slippage', None)}, max_vol_rate={getattr(context, 'max_vol_rate', None)}"
                 )
-                print(
-                    f"[DEBUG] ContextInfo: period={getattr(context, 'period', None)}, "
+                self.logger.debug(
+                    f"ContextInfo: period={getattr(context, 'period', None)}, "
                     f"barpos={getattr(context, 'barpos', None)}, "
                     f"bar_timetag={context.get_bar_timetag(context.barpos) if hasattr(context, 'barpos') else None}"
                 )
-                print(
-                    f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
+                self.logger.debug(
+                    f"GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
                 )
             except Exception as e:
-                print(f"[DEBUG] 预下单日志失败: {e}")
+                self.logger.debug(f"预下单日志失败: {e}")
 
             order_id = passorder(
                 23, 1101, account, stock_code, 11, float(price), volume,
@@ -114,13 +117,13 @@ class TradeExecutor:
                 if stock_code in holdings_after:
                     post_vol = holdings_after[stock_code].get('volume', 0)
                     avail = holdings_after[stock_code].get('available', 0)
-                    print(f"[DEBUG] BUY后持仓: {stock_code} volume={post_vol}, available={avail}")
+                    self.logger.debug(f"BUY后持仓: {stock_code} volume={post_vol}, available={avail}")
                     if pre_hold_vol is not None:
-                        print(f"[DEBUG] BUY成交回看: 申报={volume}, 实际增持={post_vol - pre_hold_vol} (前持仓={pre_hold_vol})")
+                        self.logger.debug(f"BUY成交回看: 申报={volume}, 实际增持={post_vol - pre_hold_vol} (前持仓={pre_hold_vol})")
                 else:
-                    print(f"[DEBUG] BUY后持仓: {stock_code} 不在当前持仓中")
+                    self.logger.debug(f"BUY后持仓: {stock_code} 不在当前持仓中")
             except Exception as e:
-                print(f"[DEBUG] BUY后查询持仓失败: {e}")
+                self.logger.debug(f"BUY后查询持仓失败: {e}")
             return order_id
         
         elif self.mode == 'realtime':
@@ -162,7 +165,7 @@ class TradeExecutor:
             try:
                 from xtquant.qmttools.functions import passorder
             except ImportError:
-                print(f"[BACKTEST] SELL {stock_code} at {price:.2f}, volume={volume}")
+                self.logger.info(f"SELL {stock_code} at {price:.2f}, volume={volume}")
                 return None
             
             # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
@@ -179,26 +182,26 @@ class TradeExecutor:
             except Exception as e:
                 up_stop = None
                 down_stop = None
-                print(f"[DEBUG] 获取 {stock_code} 涨跌停价失败: {e}")
+                self.logger.debug(f"获取 {stock_code} 涨跌停价失败: {e}")
             try:
                 is_susp = context.is_suspended_stock(stock_code, 1)
             except Exception as e:
                 is_susp = None
-                print(f"[DEBUG] 检查 {stock_code} 停牌状态失败: {e}")
+                self.logger.debug(f"检查 {stock_code} 停牌状态失败: {e}")
             try:
-                print(
-                    f"[DEBUG] SELL passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
+                self.logger.debug(
+                    f"SELL passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
                     f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
                 )
-                print(
-                    f"[DEBUG] BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
+                self.logger.debug(
+                    f"BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
                     f"slippage={getattr(context, 'slippage', None)}, max_vol_rate={getattr(context, 'max_vol_rate', None)}"
                 )
-                print(
-                    f"[DEBUG] GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
+                self.logger.debug(
+                    f"GuardInfo: up_stop={up_stop}, down_stop={down_stop}, is_suspended={is_susp}"
                 )
             except Exception as e:
-                print(f"[DEBUG] 预下单日志失败: {e}")
+                self.logger.debug(f"预下单日志失败: {e}")
 
             order_id = passorder(
                 24, 1101, account, stock_code, 11, float(price), volume,
@@ -210,13 +213,13 @@ class TradeExecutor:
                 if stock_code in holdings_after:
                     post_vol = holdings_after[stock_code].get('volume', 0)
                     avail = holdings_after[stock_code].get('available', 0)
-                    print(f"[DEBUG] SELL后持仓: {stock_code} volume={post_vol}, available={avail}")
+                    self.logger.debug(f"SELL后持仓: {stock_code} volume={post_vol}, available={avail}")
                     if pre_hold_vol is not None:
-                        print(f"[DEBUG] SELL成交回看: 申报={volume}, 持仓变动={post_vol - pre_hold_vol} (前持仓={pre_hold_vol})")
+                        self.logger.debug(f"SELL成交回看: 申报={volume}, 持仓变动={post_vol - pre_hold_vol} (前持仓={pre_hold_vol})")
                 else:
-                    print(f"[DEBUG] SELL后持仓: {stock_code} 不在当前持仓中")
+                    self.logger.debug(f"SELL后持仓: {stock_code} 不在当前持仓中")
             except Exception as e:
-                print(f"[DEBUG] SELL后查询持仓失败: {e}")
+                self.logger.debug(f"SELL后查询持仓失败: {e}")
             return order_id
         
         elif self.mode == 'realtime':
@@ -359,7 +362,7 @@ class TradeExecutor:
             bool: 是否成功
         """
         if self.mode == 'backtest':
-            print(f"[BACKTEST] Cancel order {order_id}")
+            self.logger.info(f"Cancel order {order_id}")
             return True
         
         elif self.mode == 'realtime':

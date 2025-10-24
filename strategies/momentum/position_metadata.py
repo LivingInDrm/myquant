@@ -8,17 +8,11 @@ class PositionMetadata:
         self.metadata = {}
     
     def calc_position_size(self, score, total_capital):
-        if score < 8:
-            return 0
-        
         position_pct = POSITION_SIZE_MAP.get(score, 0.02)
         
         return total_capital * position_pct
     
     def calc_target_profit(self, score):
-        if score < 8:
-            return 0.02
-        
         return TARGET_PROFIT_MAP.get(score, 0.02)
     
     def add_metadata(self, stock_code, date, score, buy_time=None):

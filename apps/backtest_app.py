@@ -1,6 +1,5 @@
 # coding: utf-8
 import sys
-import io
 import os
 from datetime import datetime as dt_now
 
@@ -9,23 +8,12 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# 创建UTF-8编码的日志文件（单例模式，避免重复创建）
-if not hasattr(sys, '_backtest_log_initialized'):
-    log_file_path = f"backtest_log_{dt_now.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    log_file = open(log_file_path, 'w', encoding='utf-8', buffering=1)
-    sys._backtest_log_initialized = True
-    sys._backtest_log_file = log_file
-else:
-    log_file = sys._backtest_log_file
+from utils.logger import get_logger, setup_utf8_output, get_log_filename
 
-# 重定向输出到日志文件（仅第一次初始化时）
-if not hasattr(sys, '_backtest_stdout_replaced'):
-    sys.stdout = log_file
-    sys.stderr = log_file
-    sys._backtest_stdout_replaced = True
-    
-    print(f"[INFO] Log file created: {log_file_path}")
-    print(f"[INFO] All output will be saved to UTF-8 encoded log file")
+setup_utf8_output()
+log_file_path = get_log_filename('backtest')
+logger = get_logger('backtest', log_file=log_file_path)
+logger.info(f"Log file created: {log_file_path}")
 
 import pandas as pd
 import numpy as np
@@ -52,7 +40,7 @@ def save_backtest_results(backtest_index, group_result, start_time, end_time):
         start_time: 回测开始时间（格式：'YYYYMMDD'或'YYYY-MM-DD'）
         end_time: 回测结束时间（格式：'YYYYMMDD'或'YYYY-MM-DD'）
     """
-    result_dir = os.path.join(project_root, 'result')
+    result_dir = os.path.join(project_root, 'results')
     os.makedirs(result_dir, exist_ok=True)
     
     timestamp = dt_now.now().strftime('%Y%m%d_%H%M%S')
@@ -75,16 +63,16 @@ def save_backtest_results(backtest_index, group_result, start_time, end_time):
             backtest_index.to_csv(index_file, encoding='utf-8-sig')
         else:
             backtest_index.to_csv(index_file, index=False, encoding='utf-8-sig')
-        print(f"[OK] 回测指标已保存: {index_file}")
+        logger.info(f"回测指标已保存: {index_file}")
     
     if group_result:
         for key, df in group_result.items():
             if df is not None and not df.empty:
                 group_file = os.path.join(run_dir, f'{key}.csv')
                 df.to_csv(group_file, index=False, encoding='utf-8-sig')
-                print(f"[OK] {key} 数据已保存: {group_file}")
+                logger.info(f"{key} 数据已保存: {group_file}")
     
-    print(f"[OK] 所有结果已保存到目录: {run_dir}")
+    logger.info(f"所有结果已保存到目录: {run_dir}")
 
 
 class G:
@@ -107,13 +95,14 @@ def init(C):
     g.account_id = 'test'
     
     g.data_provider = DataProvider(batch_size=500)
-    g.trade_executor = TradeExecutor(mode='backtest', strategy_name='momentum_strategy')
+    g.trade_executor = TradeExecutor(mode='backtest', strategy_name='momentum_strategy', logger=logger)
     g.trade_executor.set_context(C)
     
     g.strategy = MomentumStrategy(
         account=g.account_id, 
         strategy_name='momentum_strategy',
-        trade_executor=g.trade_executor
+        trade_executor=g.trade_executor,
+        logger=logger
     )
     
     g.stock_list = C.get_stock_list_in_sector(g.stock_pool_name)
@@ -149,7 +138,7 @@ def after_init(C):
     )
     
     if not data:
-        print("错误：无法获取历史数据")
+        logger.error("无法获取历史数据")
         return
     
 
@@ -187,7 +176,7 @@ def start_new_trading_day(current_date):
     )
     
     if not minute_data or len(minute_data) == 0:
-        print(f"[WARN] 日期 {current_date} 没有分钟线数据")
+        logger.warning(f"日期 {current_date} 没有分钟线数据")
         g.minute_data_cache[current_date] = pd.DataFrame()
     else:
         minute_data_multi = pd.concat(
@@ -203,7 +192,7 @@ def start_new_trading_day(current_date):
     
     current_holdings = g.trade_executor.get_holdings(g.account_id)
     current_cash = g.trade_executor.get_cash(g.account_id)
-    print(f"\n[{current_date}] 开盘持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
+    logger.info(f"[{current_date}] 开盘持仓数: {len(current_holdings)}, 可用资金: {current_cash:.2f}")
     
     g.strategy.init_minute_cache(current_date, g.stock_list)
 
@@ -301,36 +290,25 @@ if __name__ == '__main__':
     
     user_script = sys.argv[0]
     
-    print("=" * 60)
-    print("启动回测")
-    print("=" * 60)
-    print(f"脚本路径: {user_script}")
-    print(f"回测参数: {param}")
-    print("=" * 60)
+    logger.info(f"回测启动...回测参数: {param}")
     
     result = run_strategy_file(user_script, param=param)
     
     if result:
-        print("\n" + "=" * 60)
-        print("回测结果")
-        print("=" * 60)
         
         backtest_index = result.get_backtest_index()
-        print("\n回测指标:")
-        print(backtest_index)
+        logger.info("回测指标:")
+        logger.info(str(backtest_index))
         
-        print("\n分组结果:")
+        logger.info("分组结果:")
         group_result = result.get_group_result(['order', 'deal', 'position'])
         if 'order' in group_result:
-            print(f"\n订单总数: {len(group_result['order'])}")
+            logger.info(f"订单总数: {len(group_result['order'])}")
         if 'deal' in group_result:
-            print(f"成交总数: {len(group_result['deal'])}")
+            logger.info(f"成交总数: {len(group_result['deal'])}")
         if 'position' in group_result:
-            print(f"持仓记录数: {len(group_result['position'])}")
+            logger.info(f"持仓记录数: {len(group_result['position'])}")
         
-        print("\n" + "=" * 60)
-        print("保存回测结果")
-        print("=" * 60)
         save_backtest_results(
             backtest_index,
             group_result,
@@ -338,4 +316,4 @@ if __name__ == '__main__':
             BACKTEST_CONFIG['end_time']
         )
     
-    print("\n回测完成")
+    logger.info("回测完成")

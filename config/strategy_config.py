@@ -65,6 +65,9 @@ MAX_HOLD_DAYS = 3
 # MIN_LISTING_DAYS: 最小上市天数（过滤新股）
 MIN_LISTING_DAYS = 120
 
+# MIN_SCORE_THRESHOLD: 最小评分门槛（买入信号筛选）
+MIN_SCORE_THRESHOLD = 10
+
 # ---------- Minute-Level Parameters ----------
 # MINUTE_SCAN_ENABLED: 是否启用分钟级扫描
 MINUTE_SCAN_ENABLED = True

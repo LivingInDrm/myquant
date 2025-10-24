@@ -9,20 +9,22 @@ from utils.helpers import (
     filter_st_stocks, calc_minutes_since_open, 
     calc_daily_avg_volume_per_minute
 )
+from utils.logger import get_logger
 from config.strategy_config import (
     BUY_CONDITION_1, BUY_CONDITION_2, MIN_LISTING_DAYS,
     DAILY_AVG_VOLUME_WINDOW_5D, DAILY_AVG_VOLUME_WINDOW_10D,
-    STOP_LOSS, MAX_HOLD_DAYS
+    STOP_LOSS, MAX_HOLD_DAYS, MIN_SCORE_THRESHOLD
 )
 
 
 class MomentumStrategy:
     """短期强势股策略"""
     
-    def __init__(self, account=None, strategy_name='', trade_executor=None):
+    def __init__(self, account=None, strategy_name='', trade_executor=None, logger=None):
         self.account = account
         self.strategy_name = strategy_name
         self.trade_executor = trade_executor
+        self.logger = logger or get_logger('momentum')
         
         self.factor_calc = FactorCalculator()
         self.metadata_mgr = PositionMetadata()
@@ -134,24 +136,30 @@ class MomentumStrategy:
             minute_data: 当前时刻的分钟K线数据字典 {stock_code: {open, high, low, close, volume, amount, ...}}
         """
         if isinstance(date, str):
-            date = pd.to_datetime(date)
+            date_str = date
+        else:
+            date_str = pd.to_datetime(date).strftime('%Y%m%d')
         
-        date_normalized = date.normalize()
-        
-        matched_date = None
-        for idx_date in self.daily_avg_vol_per_min_5d.index:
-            if pd.to_datetime(idx_date).normalize() == date_normalized:
-                matched_date = idx_date
-                break
-        
-        if matched_date is None:
+        if date_str not in self.daily_avg_vol_per_min_5d.index:
             return
-        
-        date = matched_date
         
         minutes_since_open = calc_minutes_since_open(minute_timestamp)
         if minutes_since_open <= 0:
             return
+        
+        # 预提取当天所有因子数据并转换为字典（避免循环内重复Series索引）
+        day_avg_vol_5d = self.daily_avg_vol_per_min_5d.loc[date_str].to_dict()
+        day_avg_vol_10d = self.daily_avg_volume_10d.loc[date_str].to_dict()
+        
+        day_ma = {}
+        for period in [5, 10, 20, 30, 60, 120]:
+            if period in self.ma_dict and date_str in self.ma_dict[period].index:
+                day_ma[period] = self.ma_dict[period].loc[date_str].to_dict()
+        
+        day_rolling_max = {}
+        for period in [20, 40, 60, 80, 100]:
+            if period in self.rolling_max_dict and date_str in self.rolling_max_dict[period].index:
+                day_rolling_max[period] = self.rolling_max_dict[period].loc[date_str].to_dict()
         
         for stock_code, stock_data in minute_data.items():
             if stock_code not in self.minute_cache:
@@ -164,21 +172,15 @@ class MomentumStrategy:
             if pd.isna(price) or price <= 0:
                 continue
             
-            # 先累加当前分钟的成交量和成交额
+            # 累加成交量和成交额
             self.minute_cache[stock_code]['cum_volume'] += volume
             self.minute_cache[stock_code]['cum_amount'] += amount
             
-            # 获取累加后的值（截止当前分钟结束的累计量）
             cum_volume = self.minute_cache[stock_code]['cum_volume']
             cum_amount = self.minute_cache[stock_code]['cum_amount']
             
-            try:
-                if stock_code not in self.daily_avg_vol_per_min_5d.columns:
-                    continue
-                avg_vol_per_min_5d = self.daily_avg_vol_per_min_5d.loc[date, stock_code]
-                if pd.isna(avg_vol_per_min_5d) or avg_vol_per_min_5d <= 0:
-                    continue
-            except (KeyError, IndexError):
+            avg_vol_per_min_5d = day_avg_vol_5d.get(stock_code)
+            if avg_vol_per_min_5d is None or pd.isna(avg_vol_per_min_5d) or avg_vol_per_min_5d <= 0:
                 continue
             
             volume_ratio = self.factor_calc.calc_intraday_volume_ratio(
@@ -191,33 +193,24 @@ class MomentumStrategy:
             self.minute_buy_cond2[stock_code] = buy_cond2
             
             daily_ma = {}
-            try:
-                for period in [5, 10, 20, 30, 60, 120]:
-                    if period in self.ma_dict and date in self.ma_dict[period].index:
-                        if stock_code in self.ma_dict[period].columns:
-                            daily_ma[period] = self.ma_dict[period].loc[date, stock_code]
-            except (KeyError, IndexError):
-                pass
+            for period in [5, 10, 20, 30, 60, 120]:
+                if period in day_ma:
+                    val = day_ma[period].get(stock_code)
+                    if val is not None:
+                        daily_ma[period] = val
             
             daily_rolling_max = {}
-            try:
-                for period in [20, 40, 60, 80, 100]:
-                    if period in self.rolling_max_dict and date in self.rolling_max_dict[period].index:
-                        if stock_code in self.rolling_max_dict[period].columns:
-                            daily_rolling_max[period] = self.rolling_max_dict[period].loc[date, stock_code]
-            except (KeyError, IndexError):
-                pass
+            for period in [20, 40, 60, 80, 100]:
+                if period in day_rolling_max:
+                    val = day_rolling_max[period].get(stock_code)
+                    if val is not None:
+                        daily_rolling_max[period] = val
             
             if not daily_ma or not daily_rolling_max:
                 continue
             
-            try:
-                if stock_code not in self.daily_avg_volume_10d.columns:
-                    continue
-                avg_volume_10d = self.daily_avg_volume_10d.loc[date, stock_code]
-                if pd.isna(avg_volume_10d) or avg_volume_10d <= 0:
-                    avg_volume_10d = 1
-            except (KeyError, IndexError):
+            avg_volume_10d = day_avg_vol_10d.get(stock_code, 1)
+            if pd.isna(avg_volume_10d) or avg_volume_10d <= 0:
                 avg_volume_10d = 1
             
             score = self.factor_calc.calc_minute_score(
@@ -233,23 +226,17 @@ class MomentumStrategy:
             date: 日期（字符串或datetime对象）
             
         Returns:
-            pd.Series: 股票得分Series (得分>=8的股票)
+            pd.Series: 股票得分Series (得分>=MIN_SCORE_THRESHOLD的股票)
         """
         if isinstance(date, str):
-            date = pd.to_datetime(date)
+            date_str = date
+        else:
+            date_str = pd.to_datetime(date).strftime('%Y%m%d')
         
-        date_normalized = date.normalize()
-        
-        matched_date = None
-        for idx_date in self.buy_cond1_df.index:
-            if pd.to_datetime(idx_date).normalize() == date_normalized:
-                matched_date = idx_date
-                break
-        
-        if matched_date is None:
+        if date_str not in self.buy_cond1_df.index:
             return pd.Series(dtype=float)
         
-        cond1 = self.buy_cond1_df.loc[matched_date]
+        cond1 = self.buy_cond1_df.loc[date_str]
         
         result_scores = pd.Series(dtype=float)
         
@@ -265,10 +252,10 @@ class MomentumStrategy:
                 continue
             
             score = self.minute_scores[stock_code]
-            if score >= 8:
-                if self.listing_filter_df is not None and matched_date in self.listing_filter_df.index:
+            if score >= MIN_SCORE_THRESHOLD:
+                if self.listing_filter_df is not None and date_str in self.listing_filter_df.index:
                     if stock_code in self.listing_filter_df.columns:
-                        if not self.listing_filter_df.loc[matched_date, stock_code]:
+                        if not self.listing_filter_df.loc[date_str, stock_code]:
                             continue
                 
                 result_scores[stock_code] = score
@@ -387,7 +374,7 @@ class MomentumStrategy:
         if not exit_dict:
             return holdings
         
-        print(f"\n[{current_time_str}] 卖出信号: {len(exit_dict)} 只股票")
+        self.logger.info(f"[{current_time_str}] 卖出信号: {len(exit_dict)} 只股票")
         
         for stock_code, reason in exit_dict.items():
             if stock_code not in holdings:
@@ -404,7 +391,7 @@ class MomentumStrategy:
                 continue
             
             total_volume = holding['volume']
-            print(f"  [{current_time_str}] 卖出 {stock_code}: 开盘价={open_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
+            self.logger.info(f"  [{current_time_str}] 卖出 {stock_code}: 开盘价={open_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
             
             self.trade_executor.sell(
                 self.account, stock_code, open_price, available_volume,
@@ -415,7 +402,7 @@ class MomentumStrategy:
         
         holdings = self.trade_executor.get_holdings(self.account)
         cash = self.trade_executor.get_cash(self.account)
-        print(f"  [{current_time_str}] 卖出后持仓数: {len(holdings)}, 可用资金: {cash:.2f}")
+        self.logger.info(f"  [{current_time_str}] 卖出后持仓数: {len(holdings)}, 可用资金: {cash:.2f}")
         
         return holdings
     
@@ -510,17 +497,14 @@ class MomentumStrategy:
         score = self.minute_scores.get(stock_code, None)
         
         if score is None:
-            print(f"[WARNING] calc_buy_amount: {stock_code} 不在 minute_scores 中，跳过")
-            return 0, 0
-        
-        if score < 8:
+            self.logger.warning(f"calc_buy_amount: {stock_code} 不在 minute_scores 中，跳过")
             return 0, 0
         
         score = int(score)
         if score % 2 != 0:
             score = score - 1
         
-        score = max(8, min(20, score))
+        score = max(MIN_SCORE_THRESHOLD, min(20, score))
         
         amount = self.metadata_mgr.calc_position_size(score, total_capital)
         
@@ -609,8 +593,8 @@ class MomentumStrategy:
                 missing_count += 1
         
         if removed_count > 0:
-            print(f"[对账] 清理 {removed_count} 条元数据（持仓已不存在）")
+            self.logger.info(f"[对账] 清理 {removed_count} 条元数据（持仓已不存在）")
         if missing_count > 0:
-            print(f"[对账警告] {missing_count} 个持仓缺少元数据，将使用保守退出策略")
+            self.logger.warning(f"{missing_count} 个持仓缺少元数据，将使用保守退出策略")
         
         return {'removed': removed_count, 'missing': missing_count}

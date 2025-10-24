@@ -55,6 +55,7 @@ risk_control:
   max_hold_days: 3            # 最大持仓天数
   min_listing_days: 120       # 最小上市天数（过滤新股）
   max_positions: 20           # 最大持仓数量
+  min_score_threshold: 10     # 最小评分门槛（买入信号筛选）
 
 # 分钟级参数
 minute_level:
