@@ -37,6 +37,10 @@ class MomentumStrategy:
         self.rolling_max_dict = None
         self.buy_cond1_df = None
         
+        # 市场规则数据
+        self.limit_up_df = None
+        self.limit_down_df = None
+        
         # 成交量相关
         self.daily_avg_vol_per_min_5d = None
         self.daily_avg_volume_10d = None
@@ -105,6 +109,12 @@ class MomentumStrategy:
             window=DAILY_AVG_VOLUME_WINDOW_10D, min_periods=DAILY_AVG_VOLUME_WINDOW_10D
         ).mean().shift(1)
         
+        from utils.market_rules import calculate_limit_prices
+        self.limit_up_df, self.limit_down_df = calculate_limit_prices(
+            close_df, 
+            stock_list or close_df.columns.tolist()
+        )
+        
         # 保存上市日期过滤器
         if listing_filter_df is not None:
             self.listing_filter_df = listing_filter_df
@@ -155,6 +165,9 @@ class MomentumStrategy:
         # 预提取当天所有因子数据并转换为字典（避免循环内重复Series索引）
         day_avg_vol_5d = self.daily_avg_vol_per_min_5d.loc[date_str].to_dict()
         day_avg_vol_10d = self.daily_avg_volume_10d.loc[date_str].to_dict()
+        
+        day_limit_up = self.limit_up_df.loc[date_str].to_dict()
+        day_limit_down = self.limit_down_df.loc[date_str].to_dict()
         
         day_ma = {}
         for period in [5, 10, 20, 30, 60, 120]:
@@ -511,6 +524,12 @@ class MomentumStrategy:
         
         current_time_str = current_datetime.strftime('%Y%m%d %H:%M')
         
+        day_limit_up = {}
+        day_limit_down = {}
+        if current_date in self.limit_up_df.index:
+            day_limit_up = self.limit_up_df.loc[current_date].to_dict()
+            day_limit_down = self.limit_down_df.loc[current_date].to_dict()
+        
         if len(buy_scores) == 0:
             trade_logger.log_buy_funnel(
                 self.logger, current_time_str, funnel_stats, 0, current_cash
@@ -557,16 +576,13 @@ class MomentumStrategy:
                 score_detail = self.minute_score_details.get(stock_code, {})
                 
                 limit_prices = None
-                try:
-                    if self.trade_executor.context is not None:
-                        inst = self.trade_executor.context.get_instrument_detail(stock_code)
-                        if inst:
-                            limit_prices = {
-                                'up_stop': inst.get('UpStopPrice'),
-                                'down_stop': inst.get('DownStopPrice')
-                            }
-                except Exception:
-                    pass
+                limit_up = day_limit_up.get(stock_code)
+                limit_down = day_limit_down.get(stock_code)
+                if limit_up is not None and limit_down is not None:
+                    limit_prices = {
+                        'up_stop': limit_up,
+                        'down_stop': limit_down
+                    }
                 
                 trade_logger.log_buy_trade(
                     self.logger, current_time_str, stock_code, open_price, 
