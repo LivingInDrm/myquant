@@ -64,3 +64,6 @@ data/*.json
 *.temp
 temp_*.txt
 temp_*.py
+$null
+check_data_format.py
+test_perf.py

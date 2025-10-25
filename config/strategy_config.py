@@ -68,6 +68,12 @@ MIN_LISTING_DAYS = 120
 # MIN_SCORE_THRESHOLD: 最小评分门槛（买入信号筛选）
 MIN_SCORE_THRESHOLD = 10
 
+# DEFAULT_POSITION_SIZE: 默认仓位大小（当评分不在映射表中时）
+DEFAULT_POSITION_SIZE = 0.02
+
+# DEFAULT_TARGET_PROFIT: 默认止盈点（当评分不在映射表中或元数据缺失时）
+DEFAULT_TARGET_PROFIT = 0.02
+
 # ---------- Minute-Level Parameters ----------
 # MINUTE_SCAN_ENABLED: 是否启用分钟级扫描
 MINUTE_SCAN_ENABLED = True

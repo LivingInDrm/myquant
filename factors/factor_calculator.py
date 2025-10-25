@@ -190,7 +190,7 @@ class FactorCalculator:
             if period in new_high_dict:
                 score_df += new_high_dict[period].astype(int)
         
-        ma_pairs = [(10, 5), (20, 10), (30, 20), (60, 30), (120, 60)]
+        ma_pairs = [(5, 10), (10, 20), (20, 30), (30, 60), (60, 120)]
         arrangement_dict = self.check_ma_arrangement(ma_dict, ma_pairs)
         for pair, arrangement_df in arrangement_dict.items():
             score_df += arrangement_df.astype(int)
@@ -270,25 +270,32 @@ class FactorCalculator:
         return volume_ratio
     
     def calc_buy_condition_2_intraday(self, volume_ratio, cumulative_amount, 
-                                     minutes_since_open):
+                                     minutes_since_open,
+                                     early_minutes=30, early_volume_ratio=8, early_amount=30000000,
+                                     late_volume_ratio=3, late_amount=50000000):
         """
         计算买入条件2（分钟级）
         
-        开盘半小时内：量比>8 且 累计成交额>3000万
-        开盘半小时后：量比>3 且 累计成交额>5000万
+        开盘早期：量比>early_volume_ratio 且 累计成交额>early_amount
+        开盘后期：量比>late_volume_ratio 且 累计成交额>late_amount
         
         Args:
             volume_ratio: 量比（标量或Series）
             cumulative_amount: 累计成交额（标量或Series）
             minutes_since_open: 累计开市时间（分钟数）
+            early_minutes: 早期时间阈值（分钟）
+            early_volume_ratio: 早期量比阈值
+            early_amount: 早期成交额阈值
+            late_volume_ratio: 后期量比阈值
+            late_amount: 后期成交额阈值
             
         Returns:
             bool或Series: 是否满足买入条件2
         """
-        if minutes_since_open <= 30:
-            cond = (volume_ratio > 8) & (cumulative_amount > 30000000)
+        if minutes_since_open <= early_minutes:
+            cond = (volume_ratio > early_volume_ratio) & (cumulative_amount > early_amount)
         else:
-            cond = (volume_ratio > 3) & (cumulative_amount > 50000000)
+            cond = (volume_ratio > late_volume_ratio) & (cumulative_amount > late_amount)
         
         return cond
     
@@ -312,36 +319,65 @@ class FactorCalculator:
             past_10d_avg_daily_volume: 过去10日平均日成交量（标量或Series）
             
         Returns:
-            int或Series: 得分（0-20）
+            tuple: (得分, 得分明细字典)
+                - 得分: int或Series（0-20）
+                - 得分明细: {'ma_points': X, 'max_points': Y, 'arrangement_points': Z, 'volume_points': W}
         """
         score = 0
+        ma_points = 0
+        max_points = 0
+        arrangement_points = 0
+        volume_points = 0
         
         for period in [5, 10, 20, 30, 60]:
             if period in daily_ma_dict:
                 if isinstance(current_price, (int, float)):
-                    score += 1 if current_price > daily_ma_dict[period] else 0
+                    points = 1 if current_price > daily_ma_dict[period] else 0
+                    ma_points += points
+                    score += points
                 else:
-                    score += (current_price > daily_ma_dict[period]).astype(int)
+                    points = (current_price > daily_ma_dict[period]).astype(int)
+                    ma_points += points
+                    score += points
         
         for period in [20, 40, 60, 80, 100]:
             if period in daily_rolling_max_dict:
                 if isinstance(current_price, (int, float)):
-                    score += 1 if current_price > daily_rolling_max_dict[period] else 0
+                    points = 1 if current_price > daily_rolling_max_dict[period] else 0
+                    max_points += points
+                    score += points
                 else:
-                    score += (current_price > daily_rolling_max_dict[period]).astype(int)
+                    points = (current_price > daily_rolling_max_dict[period]).astype(int)
+                    max_points += points
+                    score += points
         
-        ma_pairs = [(10, 5), (20, 10), (30, 20), (60, 30), (120, 60)]
+        ma_pairs = [(5, 10), (10, 20), (20, 30), (30, 60), (60, 120)]
         for short, long in ma_pairs:
             if short in daily_ma_dict and long in daily_ma_dict:
                 if isinstance(daily_ma_dict[short], (int, float)):
-                    score += 1 if daily_ma_dict[short] > daily_ma_dict[long] else 0
+                    points = 1 if daily_ma_dict[short] > daily_ma_dict[long] else 0
+                    arrangement_points += points
+                    score += points
                 else:
-                    score += (daily_ma_dict[short] > daily_ma_dict[long]).astype(int)
+                    points = (daily_ma_dict[short] > daily_ma_dict[long]).astype(int)
+                    arrangement_points += points
+                    score += points
         
         for multiple in [3, 4, 5, 6, 7]:
             if isinstance(cumulative_volume, (int, float)):
-                score += 1 if cumulative_volume > (past_10d_avg_daily_volume * multiple) else 0
+                points = 1 if cumulative_volume > (past_10d_avg_daily_volume * multiple) else 0
+                volume_points += points
+                score += points
             else:
-                score += (cumulative_volume > (past_10d_avg_daily_volume * multiple)).astype(int)
+                points = (cumulative_volume > (past_10d_avg_daily_volume * multiple)).astype(int)
+                volume_points += points
+                score += points
         
-        return score
+        detail = {
+            'ma_points': ma_points,
+            'max_points': max_points,
+            'arrangement_points': arrangement_points,
+            'volume_points': volume_points
+        }
+        
+        return score, detail

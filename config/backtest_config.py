@@ -64,7 +64,9 @@ def build_backtest_param(config=None):
             'open_commission': backtest_cfg.get('open_commission', 0.0),
             'close_commission': backtest_cfg.get('close_commission', 0.0),
             'close_today_commission': backtest_cfg.get('close_today_commission', 0.0),
-            'benchmark': backtest_cfg.get('benchmark', '000300.SH')
+            'benchmark': backtest_cfg.get('benchmark', '000300.SH'),
+            'price_type': backtest_cfg.get('price_type', 5),
+            'quick_trade': backtest_cfg.get('quick_trade', 0)
         }
     
     return param

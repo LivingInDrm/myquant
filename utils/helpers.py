@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from xtquant import xtdata
+from config.strategy_config import TRADING_MINUTES_PER_DAY
 
 
 def timetag_to_datetime(timetag, fmt="%Y%m%d"):
@@ -324,10 +325,8 @@ def calc_daily_avg_volume_per_minute(daily_volume, window=10):
     Returns:
         Series或DataFrame: 每个日期对应的过去N日平均每分钟成交量
     """
-    total_minutes_per_day = 240
-    
     avg_volume = daily_volume.rolling(window=window, min_periods=window).sum()
     
-    avg_volume_per_minute = avg_volume / (window * total_minutes_per_day)
+    avg_volume_per_minute = avg_volume / (window * TRADING_MINUTES_PER_DAY)
     
     return avg_volume_per_minute

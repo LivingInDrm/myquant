@@ -44,7 +44,7 @@ start_time: '2025-09-01'
 
 # end_time: 回测结束时间
 #   - 格式: 'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS'
-end_time: '2025-09-06'
+end_time: '2025-10-01'
 
 # dividend_type: 除权方式
 #   - 'none': 不复权（真实价格）
@@ -56,7 +56,7 @@ dividend_type: 'front_ratio'
 # ---------- Backtest Parameters ----------
 backtest:
   # asset: 初始资金（元）
-  asset: 5000000.0
+  asset: 10000000.0
 
   # margin_ratio: 保证金比例（期货用，股票通常不用）
   #   - 0.05 表示 5% 保证金
@@ -78,7 +78,7 @@ backtest:
   #   - 单笔订单不能超过市场成交量的比例
   #   - 0.1 表示最多吃掉 10% 的市场成交量
   #   - 0 表示不限制
-  max_vol_rate: 0.05
+  max_vol_rate: 0.20
 
   # comsisson_type: 佣金类型
   #   - 0: 按金额比例
@@ -116,3 +116,15 @@ backtest:
   #   - '000905.SH': 中证500指数
   #   - '000001.SH': 上证指数
   benchmark: '000300.SH'
+
+  # price_type: 下单价格类型
+  #   - 11: 指定价（使用传入的price参数）
+  #   - 5: 最新价（市价单）
+  #   - 44: 对手方最优价
+  price_type: 5
+
+  # quick_trade: 下单时机
+  #   - 0: K线走完下单（默认，当根K线结束时成交）
+  #   - 1: 立即下单（收到信号立即下单）
+  #   - 2: 强制立即下单
+  quick_trade: 0

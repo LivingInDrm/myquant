@@ -1,10 +1,6 @@
 # 动量策略配置
 # Momentum Strategy Configuration
 
-strategy:
-  name: "短期强势股动量策略"
-  description: "基于价格动量、成交量突破和上升趋势评分的短线交易策略"
-
 # 股票池
 stock_pool: "沪深A股"
 
@@ -21,13 +17,6 @@ buy_condition_2:
   early_amount: 30000000      # 早期成交额阈值（元）
   late_volume_ratio: 3        # 后期量比阈值
   late_amount: 50000000       # 后期成交额阈值（元）
-
-# 上升趋势评分权重（0-20分）
-uptrend_score_weights:
-  price_break_ma: 5           # 突破均线（5/10/20/30/60）
-  new_highs: 5                # 创新高（20/40/60/80/100日）
-  ma_arrangement: 5           # 均线排列
-  volume_expansion: 5         # 成交量放大
 
 # 仓位管理：根据评分决定仓位大小
 position_sizing:
@@ -54,8 +43,9 @@ risk_control:
   stop_loss: -0.03            # 止损线（-3%）
   max_hold_days: 3            # 最大持仓天数
   min_listing_days: 120       # 最小上市天数（过滤新股）
-  max_positions: 20           # 最大持仓数量
   min_score_threshold: 10     # 最小评分门槛（买入信号筛选）
+  default_position_size: 0.02 # 默认仓位大小（当评分不在映射表中时）
+  default_target_profit: 0.02 # 默认止盈点（当评分不在映射表中或元数据缺失时）
 
 # 分钟级参数
 minute_level:

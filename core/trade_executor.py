@@ -7,7 +7,7 @@ from utils.logger import get_logger
 class TradeExecutor:
     """交易执行层，封装下单、撤单逻辑"""
     
-    def __init__(self, mode='backtest', strategy_name='', logger=None):
+    def __init__(self, mode='backtest', strategy_name='', logger=None, price_type=5, quick_trade=0):
         """
         初始化
         
@@ -15,12 +15,18 @@ class TradeExecutor:
             mode: 'backtest' 或 'realtime'
             strategy_name: 策略名称（回测模式需要）
             logger: 日志对象
+            price_type: 下单价格类型 (11=指定价, 5=最新价, 44=对手方最优价)
+            quick_trade: 下单时机 (0=K线走完下单, 1=立即下单, 2=强制立即下单)
         """
         self.mode = mode
         self.strategy_name = strategy_name
         self.xt_trader = None
         self.context = None
         self.logger = logger or get_logger('executor')
+        
+        # 回测下单参数
+        self.PRICE_TYPE = price_type
+        self.QUICK_TRADE = quick_trade
     
     def set_xt_trader(self, xt_trader):
         """
@@ -67,6 +73,7 @@ class TradeExecutor:
                 self.logger.info(f"BUY {stock_code} at {price:.2f}, volume={volume}")
                 return None
             
+            
             # Debug: 下单前打印关键信息（撮合参数/涨跌停/停牌/下单参数）
             try:
                 holdings_before = self.get_holdings(account, context)
@@ -90,7 +97,7 @@ class TradeExecutor:
             try:
                 self.logger.debug(
                     f"BUY passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
-                    f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
+                    f"quickTrade={self.QUICK_TRADE}, prType={self.PRICE_TYPE}, strategy={strategy_name}, remark={remark}"
                 )
                 self.logger.debug(
                     f"BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
@@ -108,8 +115,8 @@ class TradeExecutor:
                 self.logger.debug(f"预下单日志失败: {e}")
 
             order_id = passorder(
-                23, 1101, account, stock_code, 11, float(price), volume,
-                strategy_name, 0, remark, context
+                23, 1101, account, stock_code, self.PRICE_TYPE, float(price), volume,
+                strategy_name, self.QUICK_TRADE, remark, context
             )
             # Debug: 下单后立即回看该标的持仓
             try:
@@ -191,7 +198,7 @@ class TradeExecutor:
             try:
                 self.logger.debug(
                     f"SELL passorder即将提交: code={stock_code}, price={price:.4f}, vol={volume}, "
-                    f"quickTrade=0, prType=11(限价), strategy={strategy_name}, remark={remark}"
+                    f"quickTrade={self.QUICK_TRADE}, prType={self.PRICE_TYPE}, strategy={strategy_name}, remark={remark}"
                 )
                 self.logger.debug(
                     f"BacktestParams: slippage_type={getattr(context, 'slippage_type', None)}, "
@@ -204,8 +211,8 @@ class TradeExecutor:
                 self.logger.debug(f"预下单日志失败: {e}")
 
             order_id = passorder(
-                24, 1101, account, stock_code, 11, float(price), volume,
-                strategy_name, 0, remark, context
+                24, 1101, account, stock_code, self.PRICE_TYPE, float(price), volume,
+                strategy_name, self.QUICK_TRADE, remark, context
             )
             # Debug: 下单后立即回看该标的持仓
             try:

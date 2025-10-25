@@ -10,10 +10,11 @@ from utils.helpers import (
     calc_daily_avg_volume_per_minute
 )
 from utils.logger import get_logger
+from utils import trade_logger
 from config.strategy_config import (
     BUY_CONDITION_1, BUY_CONDITION_2, MIN_LISTING_DAYS,
     DAILY_AVG_VOLUME_WINDOW_5D, DAILY_AVG_VOLUME_WINDOW_10D,
-    STOP_LOSS, MAX_HOLD_DAYS, MIN_SCORE_THRESHOLD
+    STOP_LOSS, MAX_HOLD_DAYS, MIN_SCORE_THRESHOLD, DEFAULT_TARGET_PROFIT
 )
 
 
@@ -43,6 +44,7 @@ class MomentumStrategy:
         # 分钟级因子
         self.minute_cache = {}
         self.minute_scores = {}
+        self.minute_score_details = {}
         self.minute_buy_cond2 = {}
         
         # 过滤器
@@ -52,6 +54,9 @@ class MomentumStrategy:
         # 交易日期索引
         self.trading_dates = []
         self.trading_date_to_idx = {}
+        
+        # 用于计算当日盈亏
+        self.previous_day_assets = None
     
     def prepare_daily_factors(self, close_df, open_df, high_df, volume_df, amount_df, 
                              stock_list=None, listing_filter_df=None):
@@ -188,7 +193,12 @@ class MomentumStrategy:
             )
             
             buy_cond2 = self.factor_calc.calc_buy_condition_2_intraday(
-                volume_ratio, cum_amount, minutes_since_open
+                volume_ratio, cum_amount, minutes_since_open,
+                early_minutes=BUY_CONDITION_2['early_minutes'],
+                early_volume_ratio=BUY_CONDITION_2['early_volume_ratio'],
+                early_amount=BUY_CONDITION_2['early_amount'],
+                late_volume_ratio=BUY_CONDITION_2['late_volume_ratio'],
+                late_amount=BUY_CONDITION_2['late_amount']
             )
             self.minute_buy_cond2[stock_code] = buy_cond2
             
@@ -213,10 +223,11 @@ class MomentumStrategy:
             if pd.isna(avg_volume_10d) or avg_volume_10d <= 0:
                 avg_volume_10d = 1
             
-            score = self.factor_calc.calc_minute_score(
+            score, score_detail = self.factor_calc.calc_minute_score(
                 price, cum_volume, daily_ma, daily_rolling_max, avg_volume_10d
             )
             self.minute_scores[stock_code] = score
+            self.minute_score_details[stock_code] = score_detail
     
     def generate_buy_signals_minute(self, date):
         """
@@ -226,15 +237,26 @@ class MomentumStrategy:
             date: 日期（字符串或datetime对象）
             
         Returns:
-            pd.Series: 股票得分Series (得分>=MIN_SCORE_THRESHOLD的股票)
+            tuple: (买入信号Series, 漏斗统计字典)
+                - 买入信号Series: 股票得分Series (得分>=MIN_SCORE_THRESHOLD的股票)
+                - 漏斗统计: {'total': X, 'cond1': Y, 'cond2': Z, 'score': A, 'listing': B, 'min_score': MIN_SCORE_THRESHOLD}
         """
         if isinstance(date, str):
             date_str = date
         else:
             date_str = pd.to_datetime(date).strftime('%Y%m%d')
         
+        funnel_stats = {
+            'total': len(self.minute_scores),
+            'cond1': 0,
+            'cond2': 0,
+            'score': 0,
+            'listing': 0,
+            'min_score': MIN_SCORE_THRESHOLD
+        }
+        
         if date_str not in self.buy_cond1_df.index:
-            return pd.Series(dtype=float)
+            return pd.Series(dtype=float), funnel_stats
         
         cond1 = self.buy_cond1_df.loc[date_str]
         
@@ -247,20 +269,27 @@ class MomentumStrategy:
             if not cond1[stock_code]:
                 continue
             
+            funnel_stats['cond1'] += 1
+            
             cond2 = self.minute_buy_cond2.get(stock_code, False)
             if not cond2:
                 continue
             
+            funnel_stats['cond2'] += 1
+            
             score = self.minute_scores[stock_code]
             if score >= MIN_SCORE_THRESHOLD:
+                funnel_stats['score'] += 1
+                
                 if self.listing_filter_df is not None and date_str in self.listing_filter_df.index:
                     if stock_code in self.listing_filter_df.columns:
                         if not self.listing_filter_df.loc[date_str, stock_code]:
                             continue
                 
                 result_scores[stock_code] = score
+                funnel_stats['listing'] += 1
         
-        return result_scores.sort_values(ascending=False)
+        return result_scores.sort_values(ascending=False), funnel_stats
     
     
     def check_exit_conditions(self, stock_code, holding_dict, current_price, current_date):
@@ -270,13 +299,21 @@ class MomentumStrategy:
             buy_price = holding_dict['cost']
             pct_change = (current_price - buy_price) / buy_price
             
-            if pct_change >= 0.02:
-                return True, 'target_profit_no_metadata'
+            if pct_change >= DEFAULT_TARGET_PROFIT:
+                return True, 'target_profit_no_metadata', {
+                    'type': 'TAKE_PROFIT',
+                    'pct': pct_change * 100,
+                    'days': 0
+                }
             
             if pct_change <= STOP_LOSS:
-                return True, 'stop_loss_no_metadata'
+                return True, 'stop_loss_no_metadata', {
+                    'type': 'STOP_LOSS',
+                    'pct': pct_change * 100,
+                    'days': 0
+                }
             
-            return False, None
+            return False, None, None
         
         buy_price = holding_dict['cost']
         target_profit = metadata['target_profit']
@@ -299,15 +336,28 @@ class MomentumStrategy:
         pct_change = (current_price - buy_price) / buy_price
         
         if pct_change >= target_profit:
-            return True, 'target_profit'
+            return True, 'target_profit', {
+                'type': 'TAKE_PROFIT',
+                'pct': pct_change * 100,
+                'days': hold_days
+            }
         
         if pct_change <= STOP_LOSS:
-            return True, 'stop_loss'
+            return True, 'stop_loss', {
+                'type': 'STOP_LOSS',
+                'pct': pct_change * 100,
+                'days': hold_days
+            }
         
         if hold_days > MAX_HOLD_DAYS:
-            return True, 'max_hold_days'
+            return True, 'max_hold_days', {
+                'type': 'MAX_DAYS',
+                'pct': pct_change * 100,
+                'days': hold_days,
+                'limit': MAX_HOLD_DAYS
+            }
         
-        return False, None
+        return False, None, None
     
     def generate_sell_signals(self, current_prices, current_date, holdings_dict=None):
         """
@@ -320,7 +370,7 @@ class MomentumStrategy:
                           如果为None，则使用position_wrapper获取
             
         Returns:
-            dict: {stock_code: reason}
+            dict: {stock_code: (reason, reason_detail)}
         """
         if holdings_dict is None:
             if self.position_wrapper is None:
@@ -339,11 +389,11 @@ class MomentumStrategy:
         for stock_code in list(holdings_dict.keys()):
             if stock_code in current_prices:
                 current_price = current_prices[stock_code]
-                should_exit, reason = self.check_exit_conditions(
+                should_exit, reason, reason_detail = self.check_exit_conditions(
                     stock_code, holdings_dict[stock_code], current_price, current_date
                 )
                 if should_exit:
-                    exit_dict[stock_code] = reason
+                    exit_dict[stock_code] = (reason, reason_detail)
         
         return exit_dict
     
@@ -367,16 +417,14 @@ class MomentumStrategy:
             return holdings
         
         current_date = current_datetime.strftime('%Y%m%d')
-        current_time_str = current_datetime.strftime('%H:%M')
+        current_time_str = current_datetime.strftime('%Y%m%d %H:%M')
         
         exit_dict = self.generate_sell_signals(open_prices, current_date, holdings_dict=holdings)
         
         if not exit_dict:
             return holdings
         
-        self.logger.info(f"[{current_time_str}] 卖出信号: {len(exit_dict)} 只股票")
-        
-        for stock_code, reason in exit_dict.items():
+        for stock_code, (reason, reason_detail) in exit_dict.items():
             if stock_code not in holdings:
                 continue
             
@@ -390,8 +438,39 @@ class MomentumStrategy:
             if open_price <= 0:
                 continue
             
-            total_volume = holding['volume']
-            self.logger.info(f"  [{current_time_str}] 卖出 {stock_code}: 开盘价={open_price:.2f}, 数量={available_volume}, 原因={reason} (总持仓={total_volume})")
+            metadata = self.metadata_mgr.get_metadata(stock_code)
+            
+            buy_info = {
+                'price': metadata['buy_price'] if metadata and metadata.get('buy_price') else holding['cost'],
+                'volume': metadata['buy_volume'] if metadata and metadata.get('buy_volume') else holding['volume'],
+                'date': metadata['buy_date'] if metadata else 'unknown'
+            }
+            
+            actual_amount = available_volume * open_price
+            fee = max(actual_amount * 0.0003, 5) + actual_amount * 0.001
+            
+            sell_info = {
+                'price': open_price,
+                'volume': available_volume,
+                'fee': fee
+            }
+            
+            old_score = metadata['score'] if metadata else 0
+            old_score_detail = metadata.get('score_detail', {}) if metadata else {}
+            new_score = self.minute_scores.get(stock_code, 0)
+            new_score_detail = self.minute_score_details.get(stock_code, {})
+            
+            score_change = {
+                'old_score': old_score,
+                'old_detail': old_score_detail,
+                'new_score': new_score,
+                'new_detail': new_score_detail
+            }
+            
+            trade_logger.log_sell_trade(
+                self.logger, current_time_str, stock_code, buy_info, 
+                sell_info, reason_detail, score_change
+            )
             
             self.trade_executor.sell(
                 self.account, stock_code, open_price, available_volume,
@@ -400,11 +479,7 @@ class MomentumStrategy:
             
             self.on_sell(stock_code)
         
-        holdings = self.trade_executor.get_holdings(self.account)
-        cash = self.trade_executor.get_cash(self.account)
-        self.logger.info(f"  [{current_time_str}] 卖出后持仓数: {len(holdings)}, 可用资金: {cash:.2f}")
-        
-        return holdings
+        return self.trade_executor.get_holdings(self.account)
     
     def process_buy_orders(self, open_prices, current_datetime):
         """
@@ -432,9 +507,14 @@ class MomentumStrategy:
             return 0
         
         current_date = current_datetime.strftime('%Y%m%d')
-        buy_scores = self.generate_buy_signals_minute(current_date)
+        buy_scores, funnel_stats = self.generate_buy_signals_minute(current_date)
+        
+        current_time_str = current_datetime.strftime('%Y%m%d %H:%M')
         
         if len(buy_scores) == 0:
+            trade_logger.log_buy_funnel(
+                self.logger, current_time_str, funnel_stats, 0, current_cash
+            )
             return 0
         
         current_holdings = self.trade_executor.get_holdings(self.account)
@@ -466,12 +546,38 @@ class MomentumStrategy:
             volume = int(buy_amount / open_price / 100) * 100
             
             if volume >= 100:
+                actual_amount = volume * open_price
+                fee = max(actual_amount * 0.0003, 5)
+                
                 self.trade_executor.buy(
                     self.account, stock_code, open_price, volume,
                     self.strategy_name, f'buy_score_{score}'
                 )
                 
-                self.on_buy(stock_code, current_date, score, buy_time=current_datetime)
+                score_detail = self.minute_score_details.get(stock_code, {})
+                
+                limit_prices = None
+                try:
+                    if self.trade_executor.context is not None:
+                        inst = self.trade_executor.context.get_instrument_detail(stock_code)
+                        if inst:
+                            limit_prices = {
+                                'up_stop': inst.get('UpStopPrice'),
+                                'down_stop': inst.get('DownStopPrice')
+                            }
+                except Exception:
+                    pass
+                
+                trade_logger.log_buy_trade(
+                    self.logger, current_time_str, stock_code, open_price, 
+                    volume, actual_amount, fee, score, score_detail, limit_prices
+                )
+                
+                self.on_buy(
+                    stock_code, current_date, score, buy_time=current_datetime,
+                    buy_price=open_price, buy_volume=volume, buy_amount=actual_amount,
+                    buy_fee=fee, score_detail=score_detail
+                )
                 
                 current_cash = self.trade_executor.get_cash(self.account)
                 current_holdings = self.trade_executor.get_holdings(self.account)
@@ -479,6 +585,10 @@ class MomentumStrategy:
                 total_capital = self.trade_executor.get_total_asset(self.account)
                 
                 buy_count += 1
+        
+        trade_logger.log_buy_funnel(
+            self.logger, current_time_str, funnel_stats, buy_count, current_cash
+        )
         
         return buy_count
     
@@ -510,7 +620,8 @@ class MomentumStrategy:
         
         return amount, score
     
-    def on_buy(self, stock_code, date, score, buy_time=None):
+    def on_buy(self, stock_code, date, score, buy_time=None, buy_price=None, 
+              buy_volume=None, buy_amount=None, buy_fee=None, score_detail=None):
         """
         买入成功回调
         
@@ -519,8 +630,16 @@ class MomentumStrategy:
             date: 买入日期
             score: 得分
             buy_time: 买入时间戳（datetime，可选）
+            buy_price: 买入价格
+            buy_volume: 买入数量
+            buy_amount: 买入金额
+            buy_fee: 手续费
+            score_detail: 评分明细
         """
-        self.metadata_mgr.add_metadata(stock_code, date, score, buy_time)
+        self.metadata_mgr.add_metadata(
+            stock_code, date, score, buy_time, buy_price, 
+            buy_volume, buy_amount, buy_fee, score_detail
+        )
     
     def on_sell(self, stock_code):
         """
@@ -598,3 +717,90 @@ class MomentumStrategy:
             self.logger.warning(f"{missing_count} 个持仓缺少元数据，将使用保守退出策略")
         
         return {'removed': removed_count, 'missing': missing_count}
+    
+    def log_daily_snapshot(self, current_datetime, current_prices):
+        """
+        记录每日持仓快照
+        
+        Args:
+            current_datetime: 当前时间（datetime对象）
+            current_prices: 当前价格字典 {stock_code: price}
+        """
+        if self.trade_executor is None:
+            return
+        
+        current_date = current_datetime.strftime('%Y-%m-%d')
+        
+        total_assets = self.trade_executor.get_total_asset(self.account)
+        cash = self.trade_executor.get_cash(self.account)
+        holdings = self.trade_executor.get_holdings(self.account)
+        position_count = len(holdings)
+        
+        if self.previous_day_assets is None:
+            daily_pnl = 0
+            daily_pnl_pct = 0
+        else:
+            daily_pnl = total_assets - self.previous_day_assets
+            daily_pnl_pct = (daily_pnl / self.previous_day_assets * 100) if self.previous_day_assets > 0 else 0
+        
+        account_summary = {
+            'total_assets': total_assets,
+            'position_count': position_count,
+            'cash': cash,
+            'daily_pnl': daily_pnl,
+            'daily_pnl_pct': daily_pnl_pct
+        }
+        
+        position_details = []
+        
+        for stock_code, holding in holdings.items():
+            metadata = self.metadata_mgr.get_metadata(stock_code)
+            
+            cost = holding['cost']
+            current_price = current_prices.get(stock_code, cost)
+            
+            pnl_pct = (current_price - cost) / cost * 100 if cost > 0 else 0
+            
+            if metadata:
+                buy_date_str = metadata['buy_date']
+                if isinstance(buy_date_str, str):
+                    pass
+                elif isinstance(buy_date_str, datetime):
+                    buy_date_str = buy_date_str.strftime('%Y%m%d')
+                else:
+                    buy_date_str = str(buy_date_str)
+                
+                current_date_str = current_datetime.strftime('%Y%m%d')
+                
+                if buy_date_str in self.trading_date_to_idx and current_date_str in self.trading_date_to_idx:
+                    days = self.trading_date_to_idx[current_date_str] - self.trading_date_to_idx[buy_date_str]
+                else:
+                    days = 0
+                
+                score = self.minute_scores.get(stock_code, metadata.get('score', 0))
+                score_detail = self.minute_score_details.get(stock_code, metadata.get('score_detail', {}))
+            else:
+                days = 0
+                score = 0
+                score_detail = {}
+            
+            volume = holding.get('volume', 0)
+            amount = volume * current_price
+            
+            position_details.append({
+                'stock_code': stock_code,
+                'days': days,
+                'cost': cost,
+                'price': current_price,
+                'volume': volume,
+                'amount': amount,
+                'pnl_pct': pnl_pct,
+                'score': score,
+                'score_detail': score_detail
+            })
+        
+        trade_logger.log_daily_position_snapshot(
+            self.logger, current_date, account_summary, position_details
+        )
+        
+        self.previous_day_assets = total_assets

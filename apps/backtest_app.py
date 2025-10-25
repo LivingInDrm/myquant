@@ -94,8 +94,17 @@ def init(C):
     g.stock_pool_name = STOCK_POOL
     g.account_id = 'test'
     
+    price_type = BACKTEST_CONFIG.get('backtest', {}).get('price_type', 5)
+    quick_trade = BACKTEST_CONFIG.get('backtest', {}).get('quick_trade', 0)
+    
     g.data_provider = DataProvider(batch_size=500)
-    g.trade_executor = TradeExecutor(mode='backtest', strategy_name='momentum_strategy', logger=logger)
+    g.trade_executor = TradeExecutor(
+        mode='backtest', 
+        strategy_name='momentum_strategy', 
+        logger=logger,
+        price_type=price_type,
+        quick_trade=quick_trade
+    )
     g.trade_executor.set_context(C)
     
     g.strategy = MomentumStrategy(
@@ -279,6 +288,14 @@ def handlebar(C):
     # 处理买入
     if minute_open_prices:
         g.strategy.process_buy_orders(minute_open_prices, current_timestamp_dt)
+    
+    # 每日收盘快照（14:55）
+    if current_time == "14:55":
+        g.strategy.log_daily_snapshot(current_timestamp_dt, minute_open_prices)
+    
+    # 打印每个bar的持仓数
+    holdings = g.trade_executor.get_holdings(g.account_id)
+    logger.info(f"[{current_date} {current_time}] 持仓数: {len(holdings)}")
 
 
 
@@ -290,7 +307,11 @@ if __name__ == '__main__':
     
     user_script = sys.argv[0]
     
+    price_type = param.get('backtest', {}).get('price_type', 5)
+    quick_trade = param.get('backtest', {}).get('quick_trade', 0)
+    
     logger.info(f"回测启动...回测参数: {param}")
+    logger.info(f"下单参数: price_type={price_type}, quick_trade={quick_trade}")
     
     result = run_strategy_file(user_script, param=param)
     
