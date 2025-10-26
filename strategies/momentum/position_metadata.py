@@ -11,22 +11,43 @@ class PositionMetadata:
         self.metadata = {}
     
     def calc_position_size(self, score, total_capital):
-        position_pct = POSITION_SIZE_MAP.get(score, DEFAULT_POSITION_SIZE)
+        score = int(score)
+        
+        available_scores = sorted(POSITION_SIZE_MAP.keys())
+        matched_score = DEFAULT_POSITION_SIZE
+        
+        for threshold in available_scores:
+            if score >= threshold:
+                matched_score = POSITION_SIZE_MAP[threshold]
+            else:
+                break
+        
+        position_pct = matched_score
         
         return total_capital * position_pct
     
     def calc_target_profit(self, score):
-        return TARGET_PROFIT_MAP.get(score, DEFAULT_TARGET_PROFIT)
+        score = int(score)
+        
+        available_scores = sorted(TARGET_PROFIT_MAP.keys())
+        matched_profit = DEFAULT_TARGET_PROFIT
+        
+        for threshold in available_scores:
+            if score >= threshold:
+                matched_profit = TARGET_PROFIT_MAP[threshold]
+            else:
+                break
+        
+        return matched_profit
     
     def add_metadata(self, stock_code, date, score, buy_time=None, buy_price=None, 
-                    buy_volume=None, buy_amount=None, buy_fee=None, score_detail=None):
+                    buy_volume=None, buy_amount=None, score_detail=None):
         self.metadata[stock_code] = {
             'buy_date': date,
             'buy_time': buy_time,
             'buy_price': buy_price,
             'buy_volume': buy_volume,
             'buy_amount': buy_amount,
-            'buy_fee': buy_fee,
             'score': score,
             'score_detail': score_detail or {},
             'target_profit': self.calc_target_profit(score)

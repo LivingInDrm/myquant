@@ -14,7 +14,8 @@ from utils import trade_logger
 from config.strategy_config import (
     BUY_CONDITION_1, BUY_CONDITION_2, MIN_LISTING_DAYS,
     DAILY_AVG_VOLUME_WINDOW_5D, DAILY_AVG_VOLUME_WINDOW_10D,
-    STOP_LOSS, MAX_HOLD_DAYS, MIN_SCORE_THRESHOLD, DEFAULT_TARGET_PROFIT
+    STOP_LOSS, MAX_HOLD_DAYS, MIN_SCORE_THRESHOLD, DEFAULT_TARGET_PROFIT,
+    MAX_BUY_PER_BAR
 )
 
 
@@ -432,6 +433,10 @@ class MomentumStrategy:
         current_date = current_datetime.strftime('%Y%m%d')
         current_time_str = current_datetime.strftime('%Y%m%d %H:%M')
         
+        day_limit_down = {}
+        if current_date in self.limit_down_df.index:
+            day_limit_down = self.limit_down_df.loc[current_date].to_dict()
+        
         exit_dict = self.generate_sell_signals(open_prices, current_date, holdings_dict=holdings)
         
         if not exit_dict:
@@ -451,6 +456,12 @@ class MomentumStrategy:
             if open_price <= 0:
                 continue
             
+            limit_down_price = day_limit_down.get(stock_code)
+            if limit_down_price is not None and not pd.isna(limit_down_price):
+                if abs(open_price - limit_down_price) / limit_down_price < 0.001:
+                    self.logger.info(f"[跌停限制] {stock_code} 当前价格 {open_price:.2f} 已达跌停价 {limit_down_price:.2f}，跳过卖出")
+                    continue
+            
             metadata = self.metadata_mgr.get_metadata(stock_code)
             
             buy_info = {
@@ -459,13 +470,9 @@ class MomentumStrategy:
                 'date': metadata['buy_date'] if metadata else 'unknown'
             }
             
-            actual_amount = available_volume * open_price
-            fee = max(actual_amount * 0.0003, 5) + actual_amount * 0.001
-            
             sell_info = {
                 'price': open_price,
-                'volume': available_volume,
-                'fee': fee
+                'volume': available_volume
             }
             
             old_score = metadata['score'] if metadata else 0
@@ -510,9 +517,9 @@ class MomentumStrategy:
         
         current_hour = current_datetime.hour
         current_minute = current_datetime.minute
-        current_time_value = current_hour * 60 + current_minute
-        if current_time_value < 10 * 60:
-            return 0
+#        current_time_value = current_hour * 60 + current_minute
+#        if current_time_value < 10 * 60:
+#            return 0
         
         current_cash = self.trade_executor.get_cash(self.account)
         
@@ -544,6 +551,11 @@ class MomentumStrategy:
         buy_count = 0
         
         for stock_code in buy_scores.index:
+            # 限制每个bar最大买入数量
+            if buy_count >= MAX_BUY_PER_BAR:
+                self.logger.debug(f"[买入限制] 已达到单bar最大买入数量 {MAX_BUY_PER_BAR}，停止买入")
+                break
+            
             if stock_code in existing_codes:
                 continue
             
@@ -553,6 +565,12 @@ class MomentumStrategy:
             open_price = open_prices.get(stock_code, 0)
             if open_price <= 0:
                 continue
+            
+            limit_up_price = day_limit_up.get(stock_code)
+            if limit_up_price is not None and not pd.isna(limit_up_price):
+                if abs(open_price - limit_up_price) / limit_up_price < 0.001:
+                    self.logger.info(f"[涨停限制] {stock_code} 当前价格 {open_price:.2f} 已达涨停价 {limit_up_price:.2f}，跳过买入")
+                    continue
             
             buy_amount, score = self.calc_buy_amount(stock_code, total_capital)
             
@@ -566,7 +584,6 @@ class MomentumStrategy:
             
             if volume >= 100:
                 actual_amount = volume * open_price
-                fee = max(actual_amount * 0.0003, 5)
                 
                 self.trade_executor.buy(
                     self.account, stock_code, open_price, volume,
@@ -586,13 +603,13 @@ class MomentumStrategy:
                 
                 trade_logger.log_buy_trade(
                     self.logger, current_time_str, stock_code, open_price, 
-                    volume, actual_amount, fee, score, score_detail, limit_prices
+                    volume, actual_amount, score, score_detail, limit_prices
                 )
                 
                 self.on_buy(
                     stock_code, current_date, score, buy_time=current_datetime,
                     buy_price=open_price, buy_volume=volume, buy_amount=actual_amount,
-                    buy_fee=fee, score_detail=score_detail
+                    score_detail=score_detail
                 )
                 
                 current_cash = self.trade_executor.get_cash(self.account)
@@ -626,18 +643,15 @@ class MomentumStrategy:
             self.logger.warning(f"calc_buy_amount: {stock_code} 不在 minute_scores 中，跳过")
             return 0, 0
         
-        score = int(score)
-        if score % 2 != 0:
-            score = score - 1
-        
+        # 限制得分范围
         score = max(MIN_SCORE_THRESHOLD, min(20, score))
         
         amount = self.metadata_mgr.calc_position_size(score, total_capital)
         
-        return amount, score
+        return amount, int(score)
     
     def on_buy(self, stock_code, date, score, buy_time=None, buy_price=None, 
-              buy_volume=None, buy_amount=None, buy_fee=None, score_detail=None):
+              buy_volume=None, buy_amount=None, score_detail=None):
         """
         买入成功回调
         
@@ -649,12 +663,11 @@ class MomentumStrategy:
             buy_price: 买入价格
             buy_volume: 买入数量
             buy_amount: 买入金额
-            buy_fee: 手续费
             score_detail: 评分明细
         """
         self.metadata_mgr.add_metadata(
             stock_code, date, score, buy_time, buy_price, 
-            buy_volume, buy_amount, buy_fee, score_detail
+            buy_volume, buy_amount, score_detail
         )
     
     def on_sell(self, stock_code):
@@ -664,7 +677,13 @@ class MomentumStrategy:
         Args:
             stock_code: 股票代码
         """
-        self.metadata_mgr.remove_metadata(stock_code)
+        holdings = self.trade_executor.get_holdings(self.account)
+        
+        if stock_code not in holdings or holdings[stock_code].get('volume', 0) == 0:
+            self.metadata_mgr.remove_metadata(stock_code)
+        else:
+            remaining_volume = holdings[stock_code].get('volume', 0)
+            self.logger.debug(f"[部分成交] {stock_code} 仍有持仓{remaining_volume}股，保留元数据")
     
     def get_holdings(self):
         """

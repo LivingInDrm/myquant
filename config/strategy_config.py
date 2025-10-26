@@ -46,18 +46,18 @@ POSITION_SIZE_MAP = {
 #   - 键: 评分阈值
 #   - 值: 目标收益率
 TARGET_PROFIT_MAP = {
-    8: 0.02,
-    10: 0.025,
-    12: 0.03,
-    14: 0.035,
-    16: 0.04,
-    18: 0.045,
-    20: 0.05
+    8: 0.03,
+    10: 0.035,
+    12: 0.04,
+    14: 0.045,
+    16: 0.05,
+    18: 0.055,
+    20: 0.06
 }
 
 # ---------- Risk Control ----------
 # STOP_LOSS: 止损线（亏损比例）
-STOP_LOSS = -0.03
+STOP_LOSS = -0.21
 
 # MAX_HOLD_DAYS: 最大持仓天数
 MAX_HOLD_DAYS = 3
@@ -66,7 +66,10 @@ MAX_HOLD_DAYS = 3
 MIN_LISTING_DAYS = 120
 
 # MIN_SCORE_THRESHOLD: 最小评分门槛（买入信号筛选）
-MIN_SCORE_THRESHOLD = 10
+MIN_SCORE_THRESHOLD = 12
+
+# MAX_BUY_PER_BAR: 每个bar最大买入数量
+MAX_BUY_PER_BAR = 5
 
 # DEFAULT_POSITION_SIZE: 默认仓位大小（当评分不在映射表中时）
 DEFAULT_POSITION_SIZE = 0.02

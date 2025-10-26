@@ -46,7 +46,7 @@ def log_buy_funnel(logger, timestamp, funnel_stats, buy_count, cash):
         f"买入{buy_count}只 资金{format_amount(cash)}"
     )
 
-def log_buy_trade(logger, timestamp, stock_code, price, volume, amount, fee, score, score_detail, limit_prices=None):
+def log_buy_trade(logger, timestamp, stock_code, price, volume, amount, score, score_detail, limit_prices=None):
     """
     记录买入交易日志
     
@@ -57,7 +57,6 @@ def log_buy_trade(logger, timestamp, stock_code, price, volume, amount, fee, sco
         price: 成交价格
         volume: 成交数量
         amount: 成交金额
-        fee: 手续费
         score: 总评分
         score_detail: 评分明细 {'ma_points': 5, 'max_points': 5, ...}
         limit_prices: 涨跌停价格 {'up_stop': 10.50, 'down_stop': 8.50} (可选)
@@ -72,8 +71,8 @@ def log_buy_trade(logger, timestamp, stock_code, price, volume, amount, fee, sco
             limit_str = f" 涨停{format_price(up_stop)} 跌停{format_price(down_stop)}"
     
     logger.info(
-        f"[{timestamp}] 买入 {stock_code} "
-        f"价格{format_price(price)} 数量{volume}股 金额{format_amount(amount)} 费用{fee:.1f}{limit_str} | "
+        f"[{timestamp}] 买入挂单 {stock_code} "
+        f"价格{format_price(price)} 数量{volume}股 金额{format_amount(amount)}{limit_str} | "
         f"评分{score}({detail_str})"
     )
 
@@ -86,17 +85,16 @@ def log_sell_trade(logger, timestamp, stock_code, buy_info, sell_info, reason_de
         timestamp: 时间戳 (格式: YYYYMMDD HH:MM)
         stock_code: 股票代码
         buy_info: 买入信息 {'price': 12.50, 'volume': 19600, 'date': '...'}
-        sell_info: 卖出信息 {'price': 11.25, 'volume': 19600, 'fee': 73.5}
+        sell_info: 卖出信息 {'price': 11.25, 'volume': 19600}
         reason_detail: 退出原因明细 {'type': 'STOP_LOSS', 'pct': -10.2, 'days': 3}
         score_change: 评分变化 {'old_score': 18, 'old_detail': {...}, 'new_score': 7, 'new_detail': {...}}
     """
     buy_price = buy_info['price']
     sell_price = sell_info['price']
     volume = sell_info['volume']
-    fee = sell_info.get('fee', 0)
     
     profit_pct = (sell_price - buy_price) / buy_price * 100
-    profit_amount = (sell_price - buy_price) * volume - fee
+    profit_amount = (sell_price - buy_price) * volume
     
     reason_type = reason_detail['type']
     days = reason_detail.get('days', 0)
@@ -123,8 +121,8 @@ def log_sell_trade(logger, timestamp, stock_code, buy_info, sell_info, reason_de
     profit_str = "盈" if profit_amount >= 0 else "亏"
     
     logger.info(
-        f"[{timestamp}] 卖出 {stock_code} [{reason_str}] "
-        f"持有{days}天 买入{format_price(buy_price)}->卖出{format_price(sell_price)} "
+        f"[{timestamp}] 卖出挂单 {stock_code} [{reason_str}] "
+        f"持有{days}天 数量{volume}股 买入{format_price(buy_price)}->卖出{format_price(sell_price)} "
         f"{profit_str}{profit_amount:+.0f}元({format_pct(profit_pct)}) | "
         f"评分{old_score}({old_detail_str})->{new_score}({new_detail_str})"
     )

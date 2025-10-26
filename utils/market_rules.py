@@ -16,7 +16,7 @@ def calculate_limit_prices(close_df, stock_list):
     """
     prev_close = close_df.shift(1)
     
-    limit_ratio = pd.DataFrame(0.10, index=close_df.index, columns=close_df.columns)
+    limit_ratio = pd.DataFrame(0.1, index=close_df.index, columns=close_df.columns)
     
     columns = close_df.columns
     
@@ -35,9 +35,9 @@ def calculate_limit_prices(close_df, stock_list):
         index=columns
     )
     
-    limit_ratio.loc[:, is_gem] = 0.20
-    limit_ratio.loc[:, is_kcb] = 0.20
-    limit_ratio.loc[:, is_bse] = 0.30
+    limit_ratio.loc[:, is_gem] = 0.2
+    limit_ratio.loc[:, is_kcb] = 0.2
+    limit_ratio.loc[:, is_bse] = 0.3
     
     limit_up = (prev_close * (1 + limit_ratio)).round(2)
     limit_down = (prev_close * (1 - limit_ratio)).round(2)
